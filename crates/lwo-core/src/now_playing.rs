@@ -288,13 +288,15 @@ mod tests {
 
     fn ctx(now: Instant, media: Option<Arc<MediaSnapshot>>) -> Context {
         Context {
-            time: LocalTime {
-                hour: 0,
-                minute: 0,
-                second: 0,
-            },
-            now,
             media,
+            ..Context::at(
+                LocalTime {
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                },
+                now,
+            )
         }
     }
 

@@ -7,6 +7,7 @@ mod platform;
 use lwo_core::clock::Clock;
 use lwo_core::config::{self, Config};
 use lwo_core::now_playing::NowPlaying;
+use lwo_core::stats::{CpuWidget, GpuWidget, RamWidget};
 use lwo_core::widget::Widget;
 
 fn main() {
@@ -36,6 +37,16 @@ fn main() {
         widgets.push(Box::new(NowPlaying::new(
             config.widgets.now_playing.show_album,
         )));
+    }
+
+    if config.widgets.cpu.enabled {
+        widgets.push(Box::new(CpuWidget::new()));
+    }
+    if config.widgets.ram.enabled {
+        widgets.push(Box::new(RamWidget::new()));
+    }
+    if config.widgets.gpu.enabled {
+        widgets.push(Box::new(GpuWidget::new()));
     }
 
     let app = platform::App {

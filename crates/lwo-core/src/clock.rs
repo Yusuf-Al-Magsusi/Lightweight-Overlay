@@ -127,11 +127,7 @@ mod tests {
     }
 
     fn ctx(time: LocalTime) -> Context {
-        Context {
-            time,
-            now: std::time::Instant::now(),
-            media: None,
-        }
+        Context::at(time, std::time::Instant::now())
     }
 
     #[test]

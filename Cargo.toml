@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lwo-core", "crates/lwo"]
+members = ["crates/lwo-core", "crates/lwo", "crates/fake-nvml"]
 
 [workspace.package]
 version = "0.0.0"
