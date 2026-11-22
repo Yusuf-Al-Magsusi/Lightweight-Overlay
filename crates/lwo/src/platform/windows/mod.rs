@@ -7,6 +7,7 @@
 
 mod canvas;
 mod media;
+mod sensors;
 mod tray;
 
 use std::cell::RefCell;
@@ -15,7 +16,7 @@ use std::time::Instant;
 
 use lwo_core::config::Anchor;
 use lwo_core::hotkey::{Hotkey, Key};
-use lwo_core::widget::{Color, Context, LocalTime, Source, Style, Widget};
+use lwo_core::widget::{Color, Context, LocalTime, MediaSnapshot, Source, Stats, Style, Widget};
 use lwo_core::APP_NAME;
 use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::*;
@@ -29,14 +30,83 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use self::canvas::{Measurer, Surface};
 use self::media::{MediaSource, WM_MEDIA_CHANGED};
+use self::sensors::{read_memory, CpuSampler, Nvml};
 use super::App;
 use lwo_core::widget::TextMeasure;
+use std::sync::Arc;
 
 const TIMER_ID: usize = 1;
 const HOTKEY_ID: i32 = 1;
 const WIDGET_GAP: f32 = 6.0;
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+
+/// Whether a source can run on this machine. Sources that can't make their
+/// widgets disappear quietly instead of showing an error.
+fn source_available(source: Source) -> bool {
+    match source {
+        Source::Media | Source::Cpu | Source::Memory => true,
+        // Probe only: load NVML, initialise, then drop (which unloads it again).
+        Source::Gpu => Nvml::open().is_some(),
+    }
+}
+
+/// The lazy source manager. A source exists only if a widget declared it, and
+/// it runs only while the overlay is visible: `start` on show, `stop` on hide.
+/// While running, polled sources are read once per tick, and only the ones
+/// that exist.
+struct Sources {
+    media: Option<MediaSource>,
+    cpu: Option<CpuSampler>,
+    memory: bool,
+    gpu_wanted: bool,
+    gpu: Option<Nvml>,
+}
+
+impl Sources {
+    fn for_widgets(widgets: &[Box<dyn Widget>]) -> Self {
+        let wants = |s: Source| widgets.iter().any(|w| w.sources().contains(&s));
+        Self {
+            media: wants(Source::Media).then(MediaSource::new),
+            cpu: wants(Source::Cpu).then(CpuSampler::new),
+            memory: wants(Source::Memory),
+            gpu_wanted: wants(Source::Gpu),
+            gpu: None,
+        }
+    }
+
+    fn start(&mut self, notify: HWND) {
+        if let Some(m) = &mut self.media {
+            m.start(notify);
+        }
+        if let Some(c) = &mut self.cpu {
+            c.reset();
+        }
+        if self.gpu_wanted && self.gpu.is_none() {
+            self.gpu = Nvml::open();
+        }
+    }
+
+    fn stop(&mut self) {
+        if let Some(m) = &mut self.media {
+            m.stop();
+        }
+        self.gpu = None; // shuts NVML down and unloads it
+    }
+
+    /// Read every running polled source once.
+    fn poll(&mut self) -> Stats {
+        Stats {
+            cpu_load_percent: self.cpu.as_mut().and_then(CpuSampler::sample),
+            ram: if self.memory { read_memory() } else { None },
+            gpu: self.gpu.as_ref().and_then(Nvml::read),
+        }
+    }
+
+    fn media_snapshot(&self) -> Option<Arc<MediaSnapshot>> {
+        self.media.as_ref().and_then(MediaSource::snapshot)
+    }
+}
 
 struct State {
     control: HWND,
@@ -51,8 +121,9 @@ struct State {
     opacity: u8,
     visible: bool,
     toggle_label: String,
-    /// Present only if a widget needs it; running only while the overlay is visible.
-    media: Option<MediaSource>,
+    sources: Sources,
+    /// Latest polled readings, refreshed on each timer tick.
+    stats: Stats,
 }
 
 thread_local! {
@@ -88,7 +159,8 @@ impl State {
         let ctx = Context {
             time,
             now: Instant::now(),
-            media: self.media.as_ref().and_then(|m| m.snapshot()),
+            media: self.sources.media_snapshot(),
+            stats: self.stats.clone(),
         };
         let mut changed = force;
         for w in &mut self.widgets {
@@ -170,9 +242,8 @@ impl State {
         if self.widgets.is_empty() {
             return;
         }
-        if let Some(m) = &mut self.media {
-            m.start(self.control);
-        }
+        self.sources.start(self.control);
+        self.stats = self.sources.poll();
         let _ = self.draw(true);
         // SAFETY: valid overlay window. Re-asserting TOPMOST keeps us above
         // borderless-fullscreen windows that took the top spot meanwhile.
@@ -198,9 +269,8 @@ impl State {
             let _ = KillTimer(Some(self.control), TIMER_ID);
             let _ = ShowWindow(self.overlay, SW_HIDE);
         }
-        if let Some(m) = &mut self.media {
-            m.stop();
-        }
+        self.sources.stop();
+        self.stats = Stats::default();
         self.visible = false;
     }
 
@@ -223,6 +293,7 @@ impl State {
 
     fn tick(&mut self) {
         if self.visible {
+            self.stats = self.sources.poll();
             let _ = self.draw(false);
             self.schedule();
         }
@@ -352,10 +423,14 @@ pub fn run(app: App) -> std::result::Result<(), String> {
 fn run_inner(app: App) -> Result<()> {
     let App {
         config,
-        widgets,
+        mut widgets,
         mut warnings,
         ..
     } = app;
+
+    // Widgets whose data source can't run here (for example the GPU widget
+    // without an NVIDIA driver) are dropped quietly: no error, no empty panel.
+    widgets.retain(|w| w.sources().iter().all(|&s| source_available(s)));
 
     // SAFETY: process-wide setup, done once before any window exists.
     unsafe {
@@ -479,9 +554,9 @@ fn run_inner(app: App) -> Result<()> {
     };
 
     let start_visible = config.overlay.start_visible;
-    let needs_media = widgets.iter().any(|w| w.sources().contains(&Source::Media));
     let state = State {
-        media: needs_media.then(MediaSource::new),
+        sources: Sources::for_widgets(&widgets),
+        stats: Stats::default(),
         control,
         overlay,
         surface: Surface::new(win_w, win_h)?,
