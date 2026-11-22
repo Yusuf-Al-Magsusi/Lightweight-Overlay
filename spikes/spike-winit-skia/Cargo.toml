@@ -1,0 +1,23 @@
+[package]
+name = "spike-winit-skia"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# winit: cross-platform window + event loop; Apache-2.0; ~hundreds of KB.
+# tiny-skia: CPU 2D rasterizer; BSD-3-Clause; ~300 KB.
+# fontdue: CPU glyph rasterizer; MIT; ~150 KB.
+# windows: only to present the RGBA buffer with UpdateLayeredWindow (per-pixel alpha).
+[dependencies]
+winit = "0.30"
+tiny-skia = "0.11"
+fontdue = "0.9"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_WindowsAndMessaging",
+]
