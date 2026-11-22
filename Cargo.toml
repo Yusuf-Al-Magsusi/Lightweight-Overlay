@@ -1,18 +1,21 @@
 [workspace]
 resolver = "2"
-members = ["crates/lwo-core"]
-# Rendering spikes live in their own workspace so their heavy dependencies
-# never affect the product build. They are deleted after the Milestone 0 decision.
-exclude = ["spikes"]
+members = ["crates/lwo-core", "crates/lwo"]
 
 [workspace.package]
 version = "0.0.0"
 edition = "2021"
 license = "MIT"
-rust-version = "1.80"
+rust-version = "1.88"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
+
+# serde: derive (de)serialization for the config; MIT/Apache-2.0; small compile-time cost, ~0 runtime.
+# toml: parse and write config.toml; MIT/Apache-2.0; ~100-200 KB in the exe.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
 
 [profile.release]
 opt-level = "s"
