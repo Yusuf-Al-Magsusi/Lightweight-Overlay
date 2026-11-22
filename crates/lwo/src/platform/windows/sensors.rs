@@ -145,7 +145,8 @@ impl Nvml {
         Self::init(lib)
     }
 
-    /// Load from an explicit absolute path (used by tests).
+    /// Load from an explicit absolute path (used by tests and debug builds).
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     pub fn open_path(path: &Path) -> Option<Self> {
         let lib = load(&path.to_string_lossy(), LOAD_LIBRARY_FLAGS(0))?;
         Self::init(lib)
