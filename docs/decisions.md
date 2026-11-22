@@ -91,6 +91,38 @@ Same method as D4 (5 min idle, then 60 s sampled, `scripts/measure-overlay.ps1`)
 | Private bytes (commit) | 85.9 MB | n/a |
 | Threads / handles | 19 / 742 | n/a |
 
+## Measurements: Milestone 2 (clock + Now Playing)
+Same method as before (5 min idle, 60 s sampled, `scripts/measure-overlay.ps1`), release build, one run each, Windows 11, AMD RX 9070 XT. Two widgets, not yet the three-widget target scenario. "Playing" used the fake media player in `--forever` mode (a real Windows media session, redrawing every second).
+
+| Metric | No media session | Media playing | Target |
+|---|---|---|---|
+| Private working set (Task Manager "Memory") | 15.6 MB | 15.7 MB | under 30 MB |
+| CPU (% of all cores) | 0.002 | 0.008 | under 1 |
+| GPU engine use (avg / max %) | 0.008 / 0.014 | 0.007 / 0.008 | none |
+| Exe size | 0.39 MB | 0.39 MB | n/a |
+| Threads / handles | 20 / 776 | 22 / 782 | n/a |
+
+Hide/show stress: 80 toggles with a session active kept threads at about 30 and handles at about 830 (no growth), so the start/stop of the media worker does not leak.
+
+## D10: Media source design (Milestone 2)
+- API: Windows `GlobalSystemMediaTransportControlsSessionManager`. Fully event-driven: we subscribe to `CurrentSessionChanged` plus, on the current session, `MediaPropertiesChanged`, `PlaybackInfoChanged` and `TimelinePropertiesChanged`. Nothing is polled.
+- A worker thread (WinRT MTA) blocks on a channel. Events are debounced (50 ms, they usually arrive in bursts), then the session is read and `WM_MEDIA_CHANGED` is posted to the control window. The UI thread never blocks on WinRT.
+- Position: the API reports a position and the time it was valid (`LastUpdatedTime`). We add the age (ignoring values over 24 h old), then the widget ticks forward itself from `MediaSnapshot::at` while playing. No polling. Players that report seeks late will show the new position late.
+- Lazy: the source exists only if a widget declares `Source::Media`, and runs only while the overlay is visible. Hiding the overlay ends the worker and clears the snapshot; showing it starts a fresh one. A generation counter stops a worker that is shutting down from overwriting newer state.
+- Which session: the system's "current" session (what Windows shows in the volume flyout). Choosing between several players is not supported yet.
+- Widget refresh interval is 1 s only while playing; paused or idle it asks for one hour (media events still redraw immediately), so a paused player costs nothing.
+- The widget redraws only when something visible changes (title, artist, album, play state, whole-second position or duration).
+- `windows` crate 0.62 uses `join()` on async operations (in the separate `windows-future` crate), not `get()`.
+- New `windows` features: `Foundation`, `Media_Control`, `Win32_System_WinRT`; `Media` for the dev-only example. No new crates beyond what `windows` already pulls in.
+
+## D11: Now Playing widget layout (Milestone 2)
+- Fixed width (300 px at scale 1.0) so the window never resizes; long titles and artists are cut with "..." (DirectWrite trimming).
+- Rows: state label (NOW PLAYING / PAUSED), title, artist (optionally "artist - album", `show_album`), progress bar, elapsed time left and total right. Unknown duration (live streams) shows an empty bar and `--:--`.
+- No media session: the panel stays and shows "Nothing playing". Hiding the panel entirely when idle needs a dynamic window size; deferred to the settings milestone as an option.
+- Album art is not shown (would need image decoding and memory); revisit only if wanted.
+- Config: `[widgets.now_playing] enabled`, `show_album`. Enabled by default.
+- Testing without a real player: `crates/lwo/examples/fake_media.rs` registers a real Windows media session and `scripts/media-test.ps1` screenshots the overlay through play, pause, a long title and the session disappearing. The example is dev-only and not shipped.
+
 ## D9: Known limits in Milestone 1
 - DPI is read once at startup (system DPI). Moving the overlay between monitors of different DPI or changing scale at runtime is not handled yet.
 - Tray icon is the stock Windows application icon; a custom icon comes later.
