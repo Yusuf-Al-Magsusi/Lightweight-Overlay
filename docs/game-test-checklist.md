@@ -24,6 +24,31 @@ Frame times and in-game behaviour can't be measured automatically, so this is ru
 ## Report back
 For each game: baseline FPS / 1% low, FPS / 1% low with overlay, clock visible (yes/no), clicks pass through (yes/no), hotkey works (yes/no), anything odd.
 
+## Settings, edit mode and tray (Milestone 4)
+The dialog and edit mode are covered by `scripts/settings-test.ps1` and `scripts/edit-test.ps1`. These are the parts only a person can check:
+
+**Tray menu** (right-click the tray icon; it may be under the "^" overflow):
+- It shows Show / hide overlay, Edit layout, Settings... and Quit, with your hotkeys in the first two labels.
+- "Edit layout" has a check mark while edit mode is on.
+- Clicking the menu's Settings... opens the dialog; Quit closes the app and saves the layout if you were editing.
+- Clicking elsewhere closes the menu (it should not stay stuck open).
+
+**Settings window** (look and feel):
+- Controls look modern (themed), the text is readable at your display scaling, and nothing is cut off.
+- Tab moves between fields in a sensible order, Enter presses OK, Esc cancels.
+- Change the theme to Light and Midnight and press Apply: colours change at once, text stays readable.
+- Type a colour override such as `#FF8800` for Accent: the progress bars change. Type `orange`: you get a message and nothing changes.
+- Set a very small refresh (1) and a large one (30) for different widgets; the slow ones update less often.
+- Change the show/hide hotkey, Apply: the new one works, the old one does not.
+- Try a hotkey another program uses: you get a warning, the overlay keeps working.
+
+**Edit mode over a game** (borderless windowed):
+- Ctrl+Alt+E while the game is running: the widgets get outlines and can be dragged; the game keeps running.
+- Drag a widget onto a second monitor if you have one; press Ctrl+Alt+E again; restart the app: it comes back in the same place.
+- With Now Playing set to "Hide when idle": close all media players, the panel disappears; start one, it appears. In edit mode it is shown so you can place it.
+
+**Temperature units:** on an NVIDIA PC, switching to Fahrenheit changes the GPU panel's temperature to `°F`.
+
 ## Now Playing widget (Milestone 2)
 With a real player (Spotify, a browser tab, VLC, and so on) running:
 - Title, artist, elapsed and total time match the player, and the bar moves while playing.

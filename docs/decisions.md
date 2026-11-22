@@ -180,15 +180,79 @@ Both are still well inside the targets, but the GPU counters cost about 4.5 MB o
 - `start` on show, `stop` on hide. While running, polled sources are read once per timer tick, and only the ones that exist; the result is handed to widgets in `Context::stats`. Media stays event-driven (D10).
 - A widget whose source is unavailable on this machine is removed before layout (`source_available`).
 - Widgets redraw only when their formatted text or whole-percent bar changes, so a steady CPU or memory value costs no drawing.
-- The refresh interval is still a fixed 1 s per widget; per-widget refresh rates come with the settings UI (Milestone 4).
+- The refresh interval was a fixed 1 s per widget here; per-widget refresh rates arrived in Milestone 4 (D21).
 
 ## D15: Stat panels (Milestone 3)
 - CPU, Memory and GPU are separate widgets sharing one compact layout (label, large value, bar, optional detail lines). Each has a fixed width (150, 200 and 220 px at scale 1.0) so windows never resize.
 - Config: `[widgets.cpu]`, `[widgets.ram]`, `[widgets.gpu]`, each `enabled` (default true). The GPU widget is on by default and appears wherever a GPU provider works (D16).
-- Temperature is shown in Celsius only until the units setting arrives in Milestone 4.
-- Defaults now stack four panels (clock, Now Playing, CPU, memory), about 380 px tall at 100% scale. A layout and "compact mode" are part of the settings milestone.
+- Temperature was Celsius only here; the units setting arrived in Milestone 4 (D20).
+- Defaults stack the panels (clock, Now Playing, CPU, memory, GPU), which is tall at 100% scale. Milestone 4 lets the user move each widget (D17, D18) or switch any off.
 
 ## D9: Known limits in Milestone 1
 - DPI is read once at startup (system DPI). Moving the overlay between monitors of different DPI or changing scale at runtime is not handled yet.
 - Tray icon is the stock Windows application icon; a custom icon comes later.
-- Edit mode (drag to position) is Milestone 4, so the overlay is always fully click-through.
+- Edit mode (drag to position) was missing here, so the overlay was always fully click-through. It arrived in Milestone 4 (D18).
+
+## Measurements: Milestone 4 (five widgets, each in its own window)
+Same method as before (5 min idle, 60 s sampled, `scripts/measure-overlay.ps1`), release build, one run, Windows 11, AMD RX 9070 XT. Default config: all five widgets visible, GPU through the generic counters. A real media player was open on the machine, so Now Playing may have been ticking every second (a conservative case).
+
+| Metric | Milestone 4 (5 windows) | Milestone 3.5 (1 window) | Target |
+|---|---|---|---|
+| Private working set (Task Manager "Memory") | 20.8 MB | 20.9 MB | under 30 MB |
+| CPU (% of all cores) | 0.018 | 0.016 | under 1 |
+| GPU engine use (avg / max %) | 0.014 / 0.021 | 0.008 / 0.009 | none |
+| Exe size | 0.50 MB | 0.42 MB | n/a |
+| Threads / handles | 23 / 816 | 25 / 818 | n/a |
+
+Splitting into one window per widget did not measurably change memory or CPU, because the graphics factories are shared. The exe grew by 80 KB (settings dialog, edit mode, themes).
+
+Settings dialog resource check: 30 open/close cycles. After the first cycles (one-time caches for themed controls) handles stayed at 849, GDI objects at 33 and USER objects at 24, and private working set moved 20.6 to 21.4 MB, so opening and closing the dialog does not leak. The dialog's window and fonts exist only while it is open.
+
+Not measured: memory while the dialog is open; behaviour on a multi-monitor setup (the monitor logic is unit-tested but only one monitor was available).
+
+## D17: One window per widget (Milestone 4)
+- Each widget now has its own small layered window (a `Panel`), instead of all widgets sharing one stacked window. This is what lets each widget be dragged to its own place, and on a different monitor, and lets a widget such as an idle Now Playing disappear without leaving a gap.
+- Cost: one DIB and one Direct2D render target per widget. The Direct2D and DirectWrite factories are created once (`Gfx`) and shared, so a window costs little. Measured in the Milestone 4 table below. `Surface` now frees its GDI handles on drop, which matters because windows are rebuilt when settings change.
+- Default arrangement is unchanged: widgets stacked top to bottom from `[overlay]` anchor and offset on the primary monitor. Stack positions are computed over all enabled widgets, so moving one widget never shifts the others.
+- Panels are drawn without a destination position (`UpdateLayeredWindow` with no point), so repainting never fights a drag in progress.
+
+## D18: Edit mode (Milestone 4)
+- A second global hotkey (default Ctrl+Alt+E), the tray entry "Edit layout", or the dialog's "Edit layout" button turns edit mode on and off.
+- In edit mode each window loses its click-through flag and answers `WM_NCHITTEST` with "title bar", so **Windows' own window dragging moves it** (no custom mouse code). Each widget is drawn with a green outline and a faint fill so every pixel can be grabbed even with a transparent theme. Hidden widgets (for example Now Playing with hide-when-idle) are shown so they can be placed.
+- Leaving edit mode restores click-through and saves the position of **every** widget. If edit mode was started while the overlay was hidden, the overlay is hidden again afterwards. Quitting, hiding the overlay, or applying settings while editing also leaves edit mode and saves first.
+- While editing, mouse clicks on a widget go to the widget, not the game underneath. Edit mode is meant to be used briefly.
+- Not possible over exclusive-fullscreen games (out of scope, as for the overlay itself).
+
+## D19: Placement model (Milestone 4)
+- A saved position (`[layout.<widget id>]`) is a monitor index (0 = primary, then the others in system order), the nearest monitor corner as the anchor, and the distance from that corner in **100%-DPI units**. That way a position survives a change of display scaling (units) and of resolution (corner-relative); a widget dragged near the bottom-right stays near the bottom-right.
+- The placement maths (`lwo_core::layout`) is OS-independent and unit-tested, including round trips at 100/125/150/200% DPI and a resolution change.
+- On load a position is clamped so the widget lies fully on its monitor. If the saved monitor no longer exists the primary monitor is used.
+- "Reset layout" in the settings dialog clears all saved positions (back to the default stack).
+
+## D20: Settings dialog, themes, colours and units (Milestone 4)
+- **The UI is plain Win32 controls built in code**, shown on demand and destroyed on close. egui was ruled out earlier on weight (D4), and a native dialog costs nothing while closed. It has check boxes, edit boxes and drop-downs for: which widgets are on, each widget's refresh seconds and options, theme, temperature unit, scale, opacity, font, three colour overrides, both hotkeys. Buttons: Edit layout, Reset layout, OK, Cancel, Apply.
+- The form's parsing and validation live in `lwo_core::form::SettingsForm` (no UI code), so numbers, ranges, colours and hotkeys are unit-tested. The dialog is a thin layer that moves values between controls and that struct.
+- **Apply is live and safe.** Numbers are checked on a throwaway copy first; the full config is then validated (colours, hotkey syntax, the two hotkeys must differ); only then is anything saved or rebuilt. On error a message box says what is wrong and nothing changes. A successful Apply saves `config.toml` (atomic write), rebuilds the windows, re-registers the hotkeys and carries on, with no restart. Settings the dialog doesn't show (offsets, start visibility, saved positions) are preserved.
+- Themes: Dark (default), Light, Midnight. Each is three colours (text, background, accent). The three hex fields override a theme colour (`#RRGGBB` or `#RRGGBBAA`); blank means the theme's. An invalid override is ignored with a warning and the theme colour is used.
+- Units: temperature in Celsius or Fahrenheit (rounded to a whole degree). Power, memory and percentages have no unit choice.
+- `app.manifest` is embedded with the MSVC linker (`build.rs`, no new crate) for: themed (modern) controls, an explicit `asInvoker` execution level (documenting that the app never asks for admin, hard constraint 4), and per-monitor-v2 DPI awareness.
+- The dialog is a normal window with its own tab order (`IsDialogMessage`), is topmost while open, and only one can exist at a time.
+- Verified by `scripts/settings-test.ps1`, which drives the real dialog through Win32 messages (20 checks).
+
+## D21: Per-widget refresh and hide-when-idle (Milestone 4)
+- Each widget has `refresh_seconds` (1 to 60). It is a **minimum** interval: a widget never updates faster than this, and a widget that wants to be slower (Now Playing while paused) still is. A track change or seek still shows immediately, because media events bypass the interval.
+- The timer wakes only when something is due: the soonest widget deadline, lined up to the second boundary when any widget updates every second. Sources are polled once per wake-up. If every widget is set to 5 s the app wakes every 5 s.
+- Now Playing has `hide_when_idle`: with no media session at all its window is hidden (paused still counts as a session). This closes the Milestone 2 limitation that the panel stayed on screen as "Nothing playing".
+
+## D22: Hotkeys and tray (Milestone 4)
+- Hotkeys: show/hide (Ctrl+Alt+O) and edit mode (Ctrl+Alt+E), both configurable in the dialog or `config.toml`. Both are re-registered when settings change; a hotkey another program already owns gives a tray balloon, not a crash.
+- Tray menu: Show / hide overlay, Edit layout (checked while editing), Settings..., Quit. Labels show the current hotkeys. Left-click still toggles the overlay.
+
+## D23: Known limits in Milestone 4
+- DPI is still read from the system when windows are built; moving widgets between monitors of different DPI is not scaled per monitor.
+- Changing `config.toml` by hand still needs a restart (or press Apply in the dialog, which rewrites it).
+- Font and colours are global, not per widget; there is no per-widget scale.
+- The settings dialog edits fixed fields; there is no hotkey recorder (type "Ctrl+Alt+P").
+- The tray icon is still the stock Windows icon.
+- The GPU widget can be switched on later without a restart because the GPU provider is probed once at startup whether or not the widget is on; if no provider works the GPU widget stays hidden.
+- Automated tests cover the logic and the dialog; the tray menu itself (a popup menu) and behaviour over real games are hand-tested (see `docs/game-test-checklist.md`).
