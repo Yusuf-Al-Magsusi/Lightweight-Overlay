@@ -100,11 +100,28 @@ impl Default for NowPlayingConfig {
     }
 }
 
+/// Settings for widgets that only have an on/off switch so far.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToggleConfig {
+    pub enabled: bool,
+}
+
+impl Default for ToggleConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WidgetsConfig {
     pub clock: ClockConfig,
     pub now_playing: NowPlayingConfig,
+    pub cpu: ToggleConfig,
+    pub ram: ToggleConfig,
+    /// NVIDIA GPU. Quietly hidden when no NVIDIA driver (NVML) is installed.
+    pub gpu: ToggleConfig,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -223,6 +240,7 @@ mod tests {
         c.hotkeys.toggle = "Ctrl+Shift+F9".into();
         c.widgets.clock.use_24h = false;
         c.widgets.now_playing.show_album = true;
+        c.widgets.gpu.enabled = false;
         c.save(&path).unwrap();
         let loaded = Config::load_or_create(&path);
         assert!(loaded.warning.is_none());

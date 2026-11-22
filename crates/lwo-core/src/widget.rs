@@ -12,6 +12,39 @@ use std::time::{Duration, Instant};
 pub enum Source {
     /// The system's current media session (title, artist, position, play state).
     Media,
+    /// Overall CPU load.
+    Cpu,
+    /// Physical memory use.
+    Memory,
+    /// NVIDIA GPU load, temperature, power and VRAM (through NVML, if installed).
+    Gpu,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RamStats {
+    pub used_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuStats {
+    /// 0..=100
+    pub load_percent: u32,
+    pub temperature_c: u32,
+    /// `None` on GPUs or drivers that don't report power (common on laptops).
+    pub power_watts: Option<f32>,
+    pub vram_used_bytes: u64,
+    pub vram_total_bytes: u64,
+}
+
+/// Latest readings from the polled sources. A field is `None` until its
+/// source is running and has produced a value.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Stats {
+    /// 0.0..=100.0. Needs two samples, so the first poll after start is `None`.
+    pub cpu_load_percent: Option<f32>,
+    pub ram: Option<RamStats>,
+    pub gpu: Option<GpuStats>,
 }
 
 /// What the system media session reported at one moment.
@@ -96,6 +129,19 @@ pub struct Context {
     pub now: Instant,
     /// Latest media snapshot, if a media source is running and a session exists.
     pub media: Option<Arc<MediaSnapshot>>,
+    pub stats: Stats,
+}
+
+impl Context {
+    /// A context with no media and no stats.
+    pub fn at(time: LocalTime, now: Instant) -> Self {
+        Self {
+            time,
+            now,
+            media: None,
+            stats: Stats::default(),
+        }
+    }
 }
 
 /// Visual settings shared by all widgets, already multiplied by the user's scale.
