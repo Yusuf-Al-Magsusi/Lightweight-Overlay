@@ -123,6 +123,46 @@ Hide/show stress: 80 toggles with a session active kept threads at about 30 and 
 - Config: `[widgets.now_playing] enabled`, `show_album`. Enabled by default.
 - Testing without a real player: `crates/lwo/examples/fake_media.rs` registers a real Windows media session and `scripts/media-test.ps1` screenshots the overlay through play, pause, a long title and the session disappearing. The example is dev-only and not shipped.
 
+## Measurements: Milestone 3 (clock, Now Playing, CPU, memory)
+Same method as before (5 min idle, 60 s sampled, `scripts/measure-overlay.ps1`), release build, one run, Windows 11, AMD RX 9070 XT. This is the real default config on this machine: four panels visible, so it covers the "three widgets" target. The GPU panel was hidden (no NVIDIA driver) and the machine's Spotify session was paused, so Now Playing was in its cheap idle state.
+
+| Metric | Result | Target |
+|---|---|---|
+| Private working set (Task Manager "Memory") | 16.4 MB | under 30 MB |
+| CPU (% of all cores) | 0.006 | under 1 |
+| GPU engine use (avg / max %) | 0.008 / 0.016 | none |
+| Exe size | 0.41 MB | n/a |
+| Threads / handles | 25 / 807 | n/a |
+
+Previous milestone for comparison: 15.6 MB and 0.002% CPU with two widgets. The two new panels add about 1 MB and a CPU/memory read per second. Not measured: the NVIDIA path on real hardware, and CPU/RAM with the NVML library actually loaded and polled (only done against the fake DLL, which is not representative of real NVML cost).
+
+## D12: CPU and memory sources: direct Win32 calls, not `sysinfo` (Milestone 3)
+- CPU load: `GetSystemTimes`, with load computed from the change between two polls (kernel time includes idle). Memory: `GlobalMemoryStatusEx`, used = total physical minus available (the same figure Task Manager shows as "In use").
+- Chosen over the `sysinfo` crate because each is a single system call with no allocation and no extra dependency. `sysinfo` is a general-purpose library that enumerates far more than we need. **We did not benchmark `sysinfo`**: the brief said to pick whichever measures lighter, and this choice is based on the cost of the calls themselves, not a side-by-side run. The measured result for our approach is in the Milestone 3 table.
+- Verified against Windows: memory matched `Win32_OperatingSystem` exactly (19.7 / 31.1 GiB), and the CPU panel read 28% while the Windows performance counter read 28, 27 and 26% under a synthetic load.
+- The first CPU poll after the overlay is shown only records a baseline, so the CPU panel shows `--%` for about a second.
+
+## D13: NVIDIA GPU through NVML, loaded at runtime with no new dependency
+- NVML (`nvml.dll`) comes with the NVIDIA driver and is user-mode. We load it with `LoadLibraryExW` and look up seven functions with `GetProcAddress`, using the signatures from `nvml.h` (`nvmlInit_v2`, `nvmlShutdown`, `nvmlDeviceGetHandleByIndex_v2`, `nvmlDeviceGetTemperature`, `nvmlDeviceGetPowerUsage`, `nvmlDeviceGetUtilizationRates`, `nvmlDeviceGetMemoryInfo`). This avoids a crate such as `nvml-wrapper` (and its own loader dependency) for what is a very small surface.
+- Search path: the Windows system folder first, then NVIDIA's old install folder by absolute path. Never the application or current folder, so a planted `nvml.dll` beside the exe is not loaded.
+- Shown: GPU 0 only: load %, temperature (C), power (W), VRAM used / total. Clocks are not shown. Power is optional (`-- W` where the driver doesn't report it).
+- Lazy: the widget is dropped at startup if NVML can't be loaded and initialised (no NVIDIA driver, or AMD/Intel GPU): no error, no balloon, no empty panel. While the overlay is visible NVML is loaded and initialised; hiding the overlay shuts it down and unloads it (verified: the module is gone while hidden).
+- **Not tested against real NVIDIA hardware** (the dev machine has an AMD GPU). Tested against `crates/fake-nvml`, a dev-only fake `nvml.dll` that follows `nvml.h`; this verifies loading, calling, struct plumbing, unloading, and the widget. It cannot catch a mistake in my reading of `nvml.h`. Manual checklist: `docs/nvidia-test-checklist.md`.
+- Debug builds only (`cfg(debug_assertions)`) honour `LWO_NVML_PATH` to load a different library. Release builds never read it, so the shipped exe has no environment-variable hook that could load an arbitrary library.
+
+## D14: Lazy source manager (Milestone 3)
+- `Sources` in the Windows platform module holds one entry per source type, created only if some enabled widget declares it through `Widget::sources()` (`Media`, `Cpu`, `Memory`, `Gpu`).
+- `start` on show, `stop` on hide. While running, polled sources are read once per timer tick, and only the ones that exist; the result is handed to widgets in `Context::stats`. Media stays event-driven (D10).
+- A widget whose source is unavailable on this machine is removed before layout (`source_available`).
+- Widgets redraw only when their formatted text or whole-percent bar changes, so a steady CPU or memory value costs no drawing.
+- The refresh interval is still a fixed 1 s per widget; per-widget refresh rates come with the settings UI (Milestone 4).
+
+## D15: Stat panels (Milestone 3)
+- CPU, Memory and GPU are separate widgets sharing one compact layout (label, large value, bar, optional detail lines). Each has a fixed width (150, 200 and 220 px at scale 1.0) so windows never resize.
+- Config: `[widgets.cpu]`, `[widgets.ram]`, `[widgets.gpu]`, each `enabled` (default true). The GPU widget is on by default but only appears where NVML exists.
+- Temperature is shown in Celsius only until the units setting arrives in Milestone 4.
+- Defaults now stack four panels (clock, Now Playing, CPU, memory), about 380 px tall at 100% scale. A layout and "compact mode" are part of the settings milestone.
+
 ## D9: Known limits in Milestone 1
 - DPI is read once at startup (system DPI). Moving the overlay between monitors of different DPI or changing scale at runtime is not handled yet.
 - Tray icon is the stock Windows application icon; a custom icon comes later.
