@@ -126,11 +126,19 @@ mod tests {
         assert_eq!(c.format(t(15, 4, 5)), "03:04:05 PM");
     }
 
+    fn ctx(time: LocalTime) -> Context {
+        Context {
+            time,
+            now: std::time::Instant::now(),
+            media: None,
+        }
+    }
+
     #[test]
     fn update_reports_change_only_when_text_changes() {
         let mut c = Clock::new(true, true);
-        assert!(c.update(&Context { time: t(1, 2, 3) }));
-        assert!(!c.update(&Context { time: t(1, 2, 3) }));
-        assert!(c.update(&Context { time: t(1, 2, 4) }));
+        assert!(c.update(&ctx(t(1, 2, 3))));
+        assert!(!c.update(&ctx(t(1, 2, 3))));
+        assert!(c.update(&ctx(t(1, 2, 4))));
     }
 }

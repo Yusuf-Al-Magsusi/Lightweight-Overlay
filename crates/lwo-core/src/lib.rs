@@ -8,6 +8,7 @@
 pub mod clock;
 pub mod config;
 pub mod hotkey;
+pub mod now_playing;
 pub mod widget;
 
 /// Placeholder product name. Change here only.

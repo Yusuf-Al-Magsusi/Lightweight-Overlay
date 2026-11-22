@@ -83,10 +83,28 @@ impl Default for ClockConfig {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NowPlayingConfig {
+    pub enabled: bool,
+    /// Append the album to the artist line.
+    pub show_album: bool,
+}
+
+impl Default for NowPlayingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            show_album: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WidgetsConfig {
     pub clock: ClockConfig,
+    pub now_playing: NowPlayingConfig,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -204,6 +222,7 @@ mod tests {
         c.overlay.scale = 1.5;
         c.hotkeys.toggle = "Ctrl+Shift+F9".into();
         c.widgets.clock.use_24h = false;
+        c.widgets.now_playing.show_album = true;
         c.save(&path).unwrap();
         let loaded = Config::load_or_create(&path);
         assert!(loaded.warning.is_none());

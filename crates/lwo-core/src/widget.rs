@@ -3,7 +3,45 @@
 //! A widget describes what it shows through the [`Canvas`] trait; each platform
 //! implements `Canvas` with its own drawing API. Widgets never touch OS code.
 
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// A data source a widget needs. The platform starts a source only while a
+/// visible widget asks for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// The system's current media session (title, artist, position, play state).
+    Media,
+}
+
+/// What the system media session reported at one moment.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MediaSnapshot {
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    /// Playback position at `at`.
+    pub position: Duration,
+    /// Zero when unknown (for example a live stream).
+    pub duration: Duration,
+    pub playing: bool,
+    /// When `position` was valid. Between events the widget ticks forward from here.
+    pub at: Instant,
+}
+
+impl MediaSnapshot {
+    /// Position at `now`: advances while playing, never past the end.
+    pub fn position_at(&self, now: Instant) -> Duration {
+        let mut pos = self.position;
+        if self.playing {
+            pos += now.saturating_duration_since(self.at);
+        }
+        if !self.duration.is_zero() {
+            pos = pos.min(self.duration);
+        }
+        pos
+    }
+}
 
 /// Local wall-clock time, supplied by the platform layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,11 +76,26 @@ pub trait TextMeasure {
 pub trait Canvas: TextMeasure {
     fn fill_rounded_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, color: Color);
     fn draw_text(&mut self, text: &str, font: &str, size: f32, x: f32, y: f32, color: Color);
+    /// Like `draw_text` but on one line, cut off with "..." if wider than `max_width`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_trimmed(
+        &mut self,
+        text: &str,
+        font: &str,
+        size: f32,
+        x: f32,
+        y: f32,
+        max_width: f32,
+        color: Color,
+    );
 }
 
 /// Data handed to a widget when it updates.
 pub struct Context {
     pub time: LocalTime,
+    pub now: Instant,
+    /// Latest media snapshot, if a media source is running and a session exists.
+    pub media: Option<Arc<MediaSnapshot>>,
 }
 
 /// Visual settings shared by all widgets, already multiplied by the user's scale.
@@ -52,6 +105,8 @@ pub struct Style {
     pub scale: f32,
     pub text: Color,
     pub background: Color,
+    /// Highlight colour, for example the progress bar fill.
+    pub accent: Color,
 }
 
 pub trait Widget {
@@ -59,7 +114,12 @@ pub trait Widget {
     fn id(&self) -> &'static str;
     /// Name shown in the settings UI.
     fn display_name(&self) -> &'static str;
-    /// How often the widget wants `update` called while visible.
+    /// Data sources this widget needs while visible.
+    fn sources(&self) -> &'static [Source] {
+        &[]
+    }
+    /// How often the widget wants `update` called while visible. May change
+    /// with state (for example, slow down when nothing is playing).
     fn refresh_interval(&self) -> Duration;
     /// Refresh internal state. Returns true if what it draws changed.
     fn update(&mut self, ctx: &Context) -> bool;
