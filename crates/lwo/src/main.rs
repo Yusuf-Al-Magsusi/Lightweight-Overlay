@@ -6,6 +6,7 @@ mod platform;
 
 use lwo_core::clock::Clock;
 use lwo_core::config::{self, Config};
+use lwo_core::now_playing::NowPlaying;
 use lwo_core::widget::Widget;
 
 fn main() {
@@ -28,6 +29,12 @@ fn main() {
         widgets.push(Box::new(Clock::new(
             config.widgets.clock.show_seconds,
             config.widgets.clock.use_24h,
+        )));
+    }
+
+    if config.widgets.now_playing.enabled {
+        widgets.push(Box::new(NowPlaying::new(
+            config.widgets.now_playing.show_album,
         )));
     }
 
