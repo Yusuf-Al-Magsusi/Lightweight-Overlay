@@ -5,7 +5,9 @@
 
 use std::time::Duration;
 
-use crate::widget::{Canvas, Color, Context, Source, Style, TextMeasure, Widget};
+use crate::widget::{
+    Canvas, Color, Context, GpuInfo, GpuStats, Source, SourceInfo, Style, TextMeasure, Widget,
+};
 
 const PADDING: f32 = 12.0;
 const RADIUS: f32 = 10.0;
@@ -291,48 +293,82 @@ impl Widget for RamWidget {
 
 // ---------------------------------------------------------------- GPU
 
+/// GPU panel. Shows load and VRAM from any provider; the temperature / power
+/// row appears only if the provider chosen at startup can report them
+/// (NVIDIA through NVML can; the generic Windows counters can't).
 pub struct GpuWidget {
+    info: GpuInfo,
     view: View,
 }
-
-const GPU_SHAPE: Shape = Shape {
-    label: "GPU",
-    width: 220.0,
-    has_bar: true,
-    detail_lines: 2,
-};
 
 impl GpuWidget {
     pub fn new() -> Self {
         Self {
+            // Until `configure` runs, assume the richest provider.
+            info: GpuInfo {
+                has_temperature: true,
+                has_power: true,
+            },
             view: View::default(),
         }
     }
 
-    fn view_for(ctx: &Context) -> View {
-        match ctx.stats.gpu {
-            Some(g) => View {
-                headline: format!("{}%", g.load_percent.min(100)),
-                bar: Some(g.load_percent.min(100) as u8),
-                details: vec![
-                    format!(
-                        "{} \u{00B0}C    {} W",
-                        g.temperature_c,
-                        g.power_watts
-                            .map_or_else(|| NA.to_string(), |w| format!("{w:.0}"))
-                    ),
-                    format!(
-                        "VRAM {} / {} GB",
-                        format_gb(g.vram_used_bytes),
-                        format_gb(g.vram_total_bytes)
-                    ),
-                ],
-            },
-            None => View {
-                headline: format!("{NA}%"),
-                bar: None,
-                details: vec![format!("{NA} \u{00B0}C    {NA} W"), format!("VRAM {NA}")],
-            },
+    fn shape(&self) -> Shape {
+        let vendor_row = self.info.has_temperature || self.info.has_power;
+        Shape {
+            label: "GPU",
+            width: 220.0,
+            has_bar: true,
+            detail_lines: 1 + usize::from(vendor_row),
+        }
+    }
+
+    /// "62 C    180 W", with only the parts this provider can report.
+    fn vendor_line(&self, g: Option<&GpuStats>) -> String {
+        let mut parts = Vec::new();
+        if self.info.has_temperature {
+            let t = g
+                .and_then(|g| g.temperature_c)
+                .map_or_else(|| NA.to_string(), |t| t.to_string());
+            parts.push(format!("{t} \u{00B0}C"));
+        }
+        if self.info.has_power {
+            let w = g
+                .and_then(|g| g.power_watts)
+                .map_or_else(|| NA.to_string(), |w| format!("{w:.0}"));
+            parts.push(format!("{w} W"));
+        }
+        parts.join("    ")
+    }
+
+    fn view_for(&self, ctx: &Context) -> View {
+        let vendor_row = self.info.has_temperature || self.info.has_power;
+        let g = ctx.stats.gpu.as_ref();
+        let mut details = Vec::new();
+        if vendor_row {
+            details.push(self.vendor_line(g));
+        }
+        match g {
+            Some(g) => {
+                details.push(format!(
+                    "VRAM {} / {} GB",
+                    format_gb(g.vram_used_bytes),
+                    format_gb(g.vram_total_bytes)
+                ));
+                View {
+                    headline: format!("{}%", g.load_percent.min(100)),
+                    bar: Some(g.load_percent.min(100) as u8),
+                    details,
+                }
+            }
+            None => {
+                details.push(format!("VRAM {NA}"));
+                View {
+                    headline: format!("{NA}%"),
+                    bar: None,
+                    details,
+                }
+            }
         }
     }
 }
@@ -348,16 +384,21 @@ impl Widget for GpuWidget {
         "gpu"
     }
     fn display_name(&self) -> &'static str {
-        "GPU (NVIDIA)"
+        "GPU"
     }
     fn sources(&self) -> &'static [Source] {
         &[Source::Gpu]
+    }
+    fn configure(&mut self, info: &SourceInfo) {
+        if let Some(gpu) = info.gpu {
+            self.info = gpu;
+        }
     }
     fn refresh_interval(&self) -> Duration {
         Duration::from_secs(1)
     }
     fn update(&mut self, ctx: &Context) -> bool {
-        let next = Self::view_for(ctx);
+        let next = self.view_for(ctx);
         if next == self.view {
             return false;
         }
@@ -365,18 +406,18 @@ impl Widget for GpuWidget {
         true
     }
     fn size(&self, measure: &dyn TextMeasure, style: &Style) -> (f32, f32) {
-        let l = layout(&GPU_SHAPE, measure, style);
+        let l = layout(&self.shape(), measure, style);
         (l.w, l.h)
     }
     fn render(&self, canvas: &mut dyn Canvas, style: &Style) {
-        draw(&GPU_SHAPE, &self.view, canvas, style);
+        draw(&self.shape(), &self.view, canvas, style);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::widget::{GpuStats, LocalTime, RamStats, Stats};
+    use crate::widget::{LocalTime, RamStats, Stats};
     use std::time::Instant;
 
     fn ctx(stats: Stats) -> Context {
@@ -474,7 +515,7 @@ mod tests {
         w.update(&ctx(Stats {
             gpu: Some(GpuStats {
                 load_percent: 45,
-                temperature_c: 62,
+                temperature_c: Some(62),
                 power_watts: Some(180.4),
                 vram_used_bytes: 4 * GIB,
                 vram_total_bytes: 16 * GIB,
@@ -493,7 +534,7 @@ mod tests {
         w.update(&ctx(Stats {
             gpu: Some(GpuStats {
                 load_percent: 10,
-                temperature_c: 40,
+                temperature_c: Some(40),
                 power_watts: None,
                 vram_used_bytes: GIB,
                 vram_total_bytes: 8 * GIB,
@@ -501,6 +542,90 @@ mod tests {
             ..Stats::default()
         }));
         assert_eq!(w.view.details[0], "40 \u{00B0}C    -- W");
+    }
+
+    /// Measures every string as 8 px per character, 20 px tall.
+    struct FixedMeasure;
+    impl TextMeasure for FixedMeasure {
+        fn measure_text(&self, text: &str, _font: &str, _size: f32) -> (f32, f32) {
+            (text.chars().count() as f32 * 8.0, 20.0)
+        }
+    }
+
+    fn test_style() -> Style {
+        Style {
+            font: "Test".into(),
+            scale: 1.0,
+            text: Color::new(1.0, 1.0, 1.0, 1.0),
+            background: Color::new(0.0, 0.0, 0.0, 0.5),
+            accent: Color::new(0.0, 1.0, 0.0, 1.0),
+        }
+    }
+
+    fn sample_gpu() -> GpuStats {
+        GpuStats {
+            load_percent: 30,
+            temperature_c: None,
+            power_watts: None,
+            vram_used_bytes: 2 * GIB,
+            vram_total_bytes: 16 * GIB,
+        }
+    }
+
+    #[test]
+    fn generic_gpu_provider_shows_load_and_vram_only() {
+        let mut w = GpuWidget::new();
+        w.configure(&SourceInfo {
+            gpu: Some(GpuInfo {
+                has_temperature: false,
+                has_power: false,
+            }),
+        });
+        w.update(&ctx(Stats {
+            gpu: Some(sample_gpu()),
+            ..Stats::default()
+        }));
+        assert_eq!(w.view.headline, "30%");
+        assert_eq!(w.view.details, vec!["VRAM 2.0 / 16.0 GB".to_string()]);
+    }
+
+    #[test]
+    fn panel_without_vendor_row_is_shorter() {
+        let style = test_style();
+        let full = GpuWidget::new();
+        let mut generic = GpuWidget::new();
+        generic.configure(&SourceInfo {
+            gpu: Some(GpuInfo::default()),
+        });
+        let (wf, hf) = full.size(&FixedMeasure, &style);
+        let (wg, hg) = generic.size(&FixedMeasure, &style);
+        assert_eq!(wf, wg, "same width");
+        assert!(hg < hf, "generic panel must be shorter: {hg} vs {hf}");
+    }
+
+    #[test]
+    fn temperature_only_provider_shows_just_that_part() {
+        let mut w = GpuWidget::new();
+        w.configure(&SourceInfo {
+            gpu: Some(GpuInfo {
+                has_temperature: true,
+                has_power: false,
+            }),
+        });
+        let mut g = sample_gpu();
+        g.temperature_c = Some(55);
+        w.update(&ctx(Stats {
+            gpu: Some(g),
+            ..Stats::default()
+        }));
+        assert_eq!(w.view.details[0], "55 \u{00B0}C");
+    }
+
+    #[test]
+    fn configure_without_a_gpu_keeps_defaults() {
+        let mut w = GpuWidget::new();
+        w.configure(&SourceInfo { gpu: None });
+        assert!(w.info.has_temperature && w.info.has_power);
     }
 
     #[test]

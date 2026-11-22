@@ -26,11 +26,28 @@ pub struct RamStats {
     pub total_bytes: u64,
 }
 
+/// What the GPU provider chosen at startup can report. Load and VRAM are
+/// always available; temperature and power only from vendor libraries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GpuInfo {
+    pub has_temperature: bool,
+    pub has_power: bool,
+}
+
+/// Facts about this machine's data sources, learned once at startup and given
+/// to widgets before they are laid out (a widget's size never changes later).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceInfo {
+    /// `None` when no GPU source works here; the GPU widget is then dropped.
+    pub gpu: Option<GpuInfo>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GpuStats {
     /// 0..=100
     pub load_percent: u32,
-    pub temperature_c: u32,
+    /// `None` when the provider can't report it (for example generic counters).
+    pub temperature_c: Option<u32>,
     /// `None` on GPUs or drivers that don't report power (common on laptops).
     pub power_watts: Option<f32>,
     pub vram_used_bytes: u64,
@@ -164,6 +181,8 @@ pub trait Widget {
     fn sources(&self) -> &'static [Source] {
         &[]
     }
+    /// Called once at startup, before `size`, with what the sources can provide.
+    fn configure(&mut self, _info: &SourceInfo) {}
     /// How often the widget wants `update` called while visible. May change
     /// with state (for example, slow down when nothing is playing).
     fn refresh_interval(&self) -> Duration;
