@@ -162,15 +162,6 @@ Previous milestone for comparison: 15.6 MB and 0.002% CPU with two widgets. The 
 - Verified on the AMD dev machine: live counters give sane values (unit test), and under a real Direct3D compute stress (`crates/lwo/examples/gpu_load.rs`) the panel read 46% while an independent calculation of the same counters read 45.9% and 45.8%; it returned to 0% afterwards and VRAM moved with the load.
 - Test correction: the NVML unit test that loads `fake_nvml.dll` had been **silently skipping** since Milestone 3, because this Cargo version runs test executables from a nested build folder and my path guess was wrong. The end-to-end run with the fake DLL (visual test) did cover that code path, but the unit test did not run. It now searches upward for the DLL, and fails (instead of skipping) when the `CI` environment variable is set.
 
-## D17: AMD ADLX rejected on license grounds
-- ADLX (AMD's SDK for GPU metrics) was considered for AMD temperature and power. Its license is a custom AMD "Software Development Kit License Agreement", not MIT or any open-source license. It restricts distribution to compiled form under end-user terms that forbid copying and reverse engineering, forbids modifying or republishing the header files, forbids use that would put the materials under an open-source license, treats the materials as confidential, and limits use to AMD hardware. That conflicts with hard constraint 6 (MIT, Apache-2.0 or BSD-compatible only), and writing our own bindings from the headers is not a safe workaround.
-- Decision: **no ADLX code, bindings or header-derived definitions in this project.** The owner asked to stop if the license was incompatible. The plan and the findings are kept in `docs/plan-adlx.md` on the `milestone-3-adlx` branch, marked as stopped.
-- Earlier in this milestone I described ADLX as MIT-licensed; that was an unverified assumption and was wrong.
-- AMD temperature and power therefore stay unavailable for now (the panel shows load and VRAM only, D16). Ideas for later, **neither investigated yet**:
-  - Windows' own per-adapter performance data (`D3DKMTQueryAdapterInfo` with the adapter-perf-data query, declared in Microsoft's Windows SDK headers, which have a different license that would need checking). It is vendor-neutral and, as far as I know, is what Task Manager can show GPU temperature from, but whether the AMD driver fills it in is untested.
-  - AMD's older ADL library (`atiadlxx.dll` is present on the dev machine). Its SDK has its own separate license, which has not been read.
-  Either needs its license read first and an experiment on real hardware before any commitment.
-
 ## Measurements: Milestone 3.5 (clock, Now Playing, CPU, memory, GPU via counters)
 Same method as before (5 min idle, 60 s sampled, `scripts/measure-overlay.ps1`), release build, one run, Windows 11, AMD RX 9070 XT. Five panels visible, GPU provider is the generic counters (about 170 counter instances read per second). Spotify was paused, so Now Playing was idle.
 
