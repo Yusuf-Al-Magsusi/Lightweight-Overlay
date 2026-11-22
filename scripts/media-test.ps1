@@ -1,6 +1,8 @@
 # Visual test of the Now Playing widget using a fake media player.
 # Usage: scripts/media-test.ps1 -OutDir <folder for screenshots>
 # Needs: cargo build --release -p lwo ; cargo build --example fake_media
+# Close other media players first: Windows shows only its one "current" session, so a real
+# player that is open would be shown instead of the fake one.
 # Uses a temporary %APPDATA%. Takes about 35 seconds. The fake player script:
 #   0 s playing (0:30 / 3:00), 10 s paused, 20 s playing a very long title, 30 s gone.
 param([Parameter(Mandatory)] [string] $OutDir)
