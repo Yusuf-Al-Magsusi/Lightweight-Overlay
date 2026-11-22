@@ -6,6 +6,7 @@
 //! Between events the thread blocks in `GetMessageW`.
 
 mod canvas;
+mod gpu;
 mod media;
 mod sensors;
 mod tray;
@@ -16,7 +17,9 @@ use std::time::Instant;
 
 use lwo_core::config::Anchor;
 use lwo_core::hotkey::{Hotkey, Key};
-use lwo_core::widget::{Color, Context, LocalTime, MediaSnapshot, Source, Stats, Style, Widget};
+use lwo_core::widget::{
+    Color, Context, LocalTime, MediaSnapshot, Source, SourceInfo, Stats, Style, Widget,
+};
 use lwo_core::APP_NAME;
 use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::*;
@@ -29,8 +32,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use self::canvas::{Measurer, Surface};
+use self::gpu::GpuSource;
 use self::media::{MediaSource, WM_MEDIA_CHANGED};
-use self::sensors::{read_memory, CpuSampler, Nvml};
+use self::sensors::{read_memory, CpuSampler};
 use super::App;
 use lwo_core::widget::TextMeasure;
 use std::sync::Arc;
@@ -41,13 +45,17 @@ const WIDGET_GAP: f32 = 6.0;
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
-/// Whether a source can run on this machine. Sources that can't make their
-/// widgets disappear quietly instead of showing an error.
-fn source_available(source: Source) -> bool {
-    match source {
-        Source::Media | Source::Cpu | Source::Memory => true,
-        // Probe only: load NVML, initialise, then drop (which unloads it again).
-        Source::Gpu => Nvml::open().is_some(),
+/// What this machine's sources can provide, learned once at startup. A GPU
+/// provider is opened, inspected and dropped again (which unloads NVML or
+/// closes the counter query), so probing leaves nothing running.
+fn probe_sources(widgets: &[Box<dyn Widget>]) -> SourceInfo {
+    let needs_gpu = widgets.iter().any(|w| w.sources().contains(&Source::Gpu));
+    SourceInfo {
+        gpu: if needs_gpu {
+            GpuSource::open().map(|g| g.info())
+        } else {
+            None
+        },
     }
 }
 
@@ -60,7 +68,7 @@ struct Sources {
     cpu: Option<CpuSampler>,
     memory: bool,
     gpu_wanted: bool,
-    gpu: Option<Nvml>,
+    gpu: Option<GpuSource>,
 }
 
 impl Sources {
@@ -83,7 +91,7 @@ impl Sources {
             c.reset();
         }
         if self.gpu_wanted && self.gpu.is_none() {
-            self.gpu = Nvml::open();
+            self.gpu = GpuSource::open();
         }
     }
 
@@ -91,7 +99,7 @@ impl Sources {
         if let Some(m) = &mut self.media {
             m.stop();
         }
-        self.gpu = None; // shuts NVML down and unloads it
+        self.gpu = None; // shuts NVML down and unloads it, or closes the counter query
     }
 
     /// Read every running polled source once.
@@ -99,7 +107,7 @@ impl Sources {
         Stats {
             cpu_load_percent: self.cpu.as_mut().and_then(CpuSampler::sample),
             ram: if self.memory { read_memory() } else { None },
-            gpu: self.gpu.as_ref().and_then(Nvml::read),
+            gpu: self.gpu.as_mut().and_then(GpuSource::read),
         }
     }
 
@@ -428,9 +436,17 @@ fn run_inner(app: App) -> Result<()> {
         ..
     } = app;
 
-    // Widgets whose data source can't run here (for example the GPU widget
-    // without an NVIDIA driver) are dropped quietly: no error, no empty panel.
-    widgets.retain(|w| w.sources().iter().all(|&s| source_available(s)));
+    // Learn what the sources can provide, drop widgets whose source can't run
+    // here (quietly: no error, no empty panel), and tell the rest what exists.
+    let info = probe_sources(&widgets);
+    widgets.retain(|w| {
+        w.sources()
+            .iter()
+            .all(|&s| s != Source::Gpu || info.gpu.is_some())
+    });
+    for w in &mut widgets {
+        w.configure(&info);
+    }
 
     // SAFETY: process-wide setup, done once before any window exists.
     unsafe {

@@ -219,7 +219,7 @@ impl Nvml {
             let power_ok = (self.power)(self.device, &mut milliwatts) == NVML_SUCCESS;
             Some(GpuStats {
                 load_percent: util.gpu,
-                temperature_c: temp,
+                temperature_c: Some(temp),
                 power_watts: power_ok.then(|| milliwatts as f32 / 1000.0),
                 vram_used_bytes: mem.used,
                 vram_total_bytes: mem.total,
@@ -277,10 +277,14 @@ mod tests {
 
     /// Path of the fake NVML library built by `cargo build --workspace`.
     fn fake_nvml() -> Option<std::path::PathBuf> {
+        // The test exe's folder depends on the Cargo version (`target/debug/deps` or a
+        // nested `target/debug/build/...` layout), so search upward for the DLL.
         let exe = std::env::current_exe().ok()?;
-        let dir = exe.parent()?.parent()?; // target/<profile>/deps/x.exe -> target/<profile>
-        let path = dir.join("fake_nvml.dll");
-        path.exists().then_some(path)
+        exe.ancestors()
+            .skip(1)
+            .take(8)
+            .map(|dir| dir.join("fake_nvml.dll"))
+            .find(|p| p.exists())
     }
 
     #[test]
@@ -297,13 +301,18 @@ mod tests {
     #[test]
     fn reads_values_from_the_fake_nvml() {
         let Some(path) = fake_nvml() else {
+            // A silent skip hides a broken test, so CI must fail instead.
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "fake_nvml.dll not found: build the workspace before testing"
+            );
             eprintln!("skipped: run `cargo build --workspace` first to build fake_nvml.dll");
             return;
         };
         let nvml = Nvml::open_path(&path).expect("open fake nvml");
         let g = nvml.read().expect("read");
         assert_eq!(g.load_percent, 45);
-        assert_eq!(g.temperature_c, 61);
+        assert_eq!(g.temperature_c, Some(61));
         assert_eq!(g.power_watts, Some(180.5));
         assert_eq!(g.vram_used_bytes, 4 * 1024 * 1024 * 1024);
         assert_eq!(g.vram_total_bytes, 16 * 1024 * 1024 * 1024);
