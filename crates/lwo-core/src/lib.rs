@@ -8,8 +8,11 @@
 pub mod clock;
 pub mod config;
 pub mod hotkey;
+pub mod layout;
 pub mod now_playing;
 pub mod stats;
+pub mod theme;
+pub mod units;
 pub mod widget;
 
 /// Placeholder product name. Change here only.

@@ -34,6 +34,8 @@ struct Shown {
 
 pub struct NowPlaying {
     pub show_album: bool,
+    /// Hide the whole panel while there is no media session at all.
+    pub hide_when_idle: bool,
     snap: Option<Arc<MediaSnapshot>>,
     now: Instant,
     shown: Option<Shown>,
@@ -62,9 +64,10 @@ struct Layout {
 }
 
 impl NowPlaying {
-    pub fn new(show_album: bool) -> Self {
+    pub fn new(show_album: bool, hide_when_idle: bool) -> Self {
         Self {
             show_album,
+            hide_when_idle,
             snap: None,
             now: Instant::now(),
             shown: None,
@@ -127,6 +130,11 @@ impl Widget for NowPlaying {
 
     fn sources(&self) -> &'static [Source] {
         &[Source::Media]
+    }
+
+    fn visible(&self) -> bool {
+        // Paused still counts as a session; only a missing one hides the panel.
+        !(self.hide_when_idle && self.snap.is_none())
     }
 
     fn refresh_interval(&self) -> Duration {
@@ -322,7 +330,7 @@ mod tests {
 
     #[test]
     fn first_update_draws_even_with_no_media() {
-        let mut w = NowPlaying::new(false);
+        let mut w = NowPlaying::new(false, false);
         let t0 = Instant::now();
         assert!(w.update(&ctx(t0, None)));
         assert!(!w.update(&ctx(t0, None)));
@@ -330,7 +338,7 @@ mod tests {
 
     #[test]
     fn redraws_each_second_while_playing_but_not_within_a_second() {
-        let mut w = NowPlaying::new(false);
+        let mut w = NowPlaying::new(false, false);
         let t0 = Instant::now();
         let m = snap(true, 10, 200, t0);
         assert!(w.update(&ctx(t0, Some(m.clone()))));
@@ -340,7 +348,7 @@ mod tests {
 
     #[test]
     fn paused_does_not_redraw_as_time_passes() {
-        let mut w = NowPlaying::new(false);
+        let mut w = NowPlaying::new(false, false);
         let t0 = Instant::now();
         let m = snap(false, 10, 200, t0);
         assert!(w.update(&ctx(t0, Some(m.clone()))));
@@ -349,7 +357,7 @@ mod tests {
 
     #[test]
     fn track_and_state_changes_redraw() {
-        let mut w = NowPlaying::new(false);
+        let mut w = NowPlaying::new(false, false);
         let t0 = Instant::now();
         assert!(w.update(&ctx(t0, Some(snap(true, 10, 200, t0)))));
         // Pause at the same position.
@@ -364,7 +372,7 @@ mod tests {
 
     #[test]
     fn refresh_interval_is_one_second_only_while_playing() {
-        let mut w = NowPlaying::new(false);
+        let mut w = NowPlaying::new(false, false);
         let t0 = Instant::now();
         w.update(&ctx(t0, None));
         assert!(w.refresh_interval() > Duration::from_secs(60));
@@ -375,7 +383,26 @@ mod tests {
     }
 
     #[test]
+    fn hide_when_idle_hides_only_when_there_is_no_session() {
+        let t0 = Instant::now();
+        let mut w = NowPlaying::new(false, true);
+        w.update(&ctx(t0, None));
+        assert!(!w.visible(), "no session: hidden");
+        w.update(&ctx(t0, Some(snap(false, 5, 100, t0))));
+        assert!(w.visible(), "paused session: still shown");
+        w.update(&ctx(t0, None));
+        assert!(!w.visible(), "session gone: hidden again");
+    }
+
+    #[test]
+    fn without_hide_when_idle_the_panel_is_always_visible() {
+        let mut w = NowPlaying::new(false, false);
+        w.update(&ctx(Instant::now(), None));
+        assert!(w.visible());
+    }
+
+    #[test]
     fn declares_media_source() {
-        assert_eq!(NowPlaying::new(false).sources(), &[Source::Media]);
+        assert_eq!(NowPlaying::new(false, false).sources(), &[Source::Media]);
     }
 }
