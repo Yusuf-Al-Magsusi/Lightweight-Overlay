@@ -1,0 +1,11 @@
+[package]
+name = "spike-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# eframe/egui: immediate-mode GUI + window; MIT/Apache-2.0; several MB.
+# The glow (OpenGL) backend drew nothing on the dev machine (see docs/decisions.md D4), so only wgpu is kept.
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu"] }
