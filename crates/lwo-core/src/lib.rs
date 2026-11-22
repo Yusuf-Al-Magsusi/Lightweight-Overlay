@@ -7,6 +7,7 @@
 
 pub mod clock;
 pub mod config;
+pub mod form;
 pub mod hotkey;
 pub mod layout;
 pub mod now_playing;
