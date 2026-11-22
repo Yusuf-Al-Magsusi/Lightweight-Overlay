@@ -1,8 +1,9 @@
 # Visual test of the CPU / memory / GPU widgets.
 # Usage: scripts/stats-test.ps1 -OutDir <folder for screenshots>
 # Needs: cargo build --workspace ; cargo build --release -p lwo
-#  1. release build, real machine: CPU and memory panels show; the GPU panel must be
-#     absent unless this PC has an NVIDIA driver (no error either way).
+#  1. release build, real machine: CPU, memory and GPU panels show. Without an NVIDIA
+#     driver the GPU panel has only load and VRAM (generic Windows counters).
+#     (For real GPU load run `cargo run --example gpu_load -- 15` meanwhile.)
 #  2. debug build with the fake nvml.dll (debug builds only honour LWO_NVML_PATH):
 #     the GPU panel must appear and its numbers must change every second.
 # Uses a temporary %APPDATA%. Takes about 25 seconds.
@@ -51,7 +52,7 @@ try {
     $app = Start-Process "target\debug\lwo.exe" -PassThru
     Start-Sleep -Seconds 4
     $h2 = Overlay-Height
-    "debug+fake nvml: process alive=$(-not $app.HasExited) overlay height=$h2 (taller than release by the GPU panel: $($h2 - $h1) px)"
+    "debug+fake nvml: process alive=$(-not $app.HasExited) overlay height=$h2 (taller than release by the temperature/power row: $($h2 - $h1) px)"
     Snap "2-fake-nvml-a" ([math]::Min(900, $h2 + 60))
     Start-Sleep -Seconds 3
     Snap "3-fake-nvml-b" ([math]::Min(900, $h2 + 60))
