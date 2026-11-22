@@ -24,5 +24,14 @@ Frame times and in-game behaviour can't be measured automatically, so this is ru
 ## Report back
 For each game: baseline FPS / 1% low, FPS / 1% low with overlay, clock visible (yes/no), clicks pass through (yes/no), hotkey works (yes/no), anything odd.
 
+## Now Playing widget (Milestone 2)
+With a real player (Spotify, a browser tab, VLC, and so on) running:
+- Title, artist, elapsed and total time match the player, and the bar moves while playing.
+- Pause in the player: the label changes to PAUSED and the time stops. Resume: it moves again.
+- Skip a track: title and artist change within about a second.
+- Seek in the player: the elapsed time jumps to the new position (some players report seeks late).
+- Close the player: the widget shows "Nothing playing".
+- With two players open, the widget follows the one Windows treats as current (the one shown in the volume flyout).
+
 ## Rendering decision
 The Milestone 0 spikes compared rendering approaches (see `docs/decisions.md`, D4). The frame-time comparison between candidates was never run; only the chosen raw Win32 approach is in the codebase now.

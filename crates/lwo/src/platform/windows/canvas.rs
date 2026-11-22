@@ -197,6 +197,51 @@ impl Canvas for Frame<'_> {
         }
     }
 
+    fn draw_text_trimmed(
+        &mut self,
+        text: &str,
+        font: &str,
+        size: f32,
+        x: f32,
+        y: f32,
+        max_width: f32,
+        color: Color,
+    ) {
+        let (ox, oy) = self.origin;
+        let Ok(format) = self.measurer.format(font, size) else {
+            return;
+        };
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        // SAFETY: called between BeginDraw and EndDraw with a valid render target;
+        // the trimming sign is created from the same format and factory.
+        unsafe {
+            let _ = format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+            let trimming = DWRITE_TRIMMING {
+                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                delimiter: 0,
+                delimiterCount: 0,
+            };
+            if let Ok(sign) = self.measurer.dw.CreateEllipsisTrimmingSign(&format) {
+                let _ = format.SetTrimming(&trimming, &sign);
+            }
+            if let Ok(brush) = self.rt.CreateSolidColorBrush(&d2d_color(color), None) {
+                self.rt.DrawText(
+                    &wide,
+                    &format,
+                    &D2D_RECT_F {
+                        left: ox + x,
+                        top: oy + y,
+                        right: ox + x + max_width,
+                        bottom: oy + y + HUGE,
+                    },
+                    &brush,
+                    D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                );
+            }
+        }
+    }
+
     fn draw_text(&mut self, text: &str, font: &str, size: f32, x: f32, y: f32, color: Color) {
         let (ox, oy) = self.origin;
         let Ok(format) = self.measurer.format(font, size) else {

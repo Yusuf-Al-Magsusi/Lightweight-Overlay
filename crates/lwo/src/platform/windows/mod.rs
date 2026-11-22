@@ -6,14 +6,16 @@
 //! Between events the thread blocks in `GetMessageW`.
 
 mod canvas;
+mod media;
 mod tray;
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Instant;
 
 use lwo_core::config::Anchor;
 use lwo_core::hotkey::{Hotkey, Key};
-use lwo_core::widget::{Color, Context, LocalTime, Style, Widget};
+use lwo_core::widget::{Color, Context, LocalTime, Source, Style, Widget};
 use lwo_core::APP_NAME;
 use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::*;
@@ -26,6 +28,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use self::canvas::{Measurer, Surface};
+use self::media::{MediaSource, WM_MEDIA_CHANGED};
 use super::App;
 use lwo_core::widget::TextMeasure;
 
@@ -48,6 +51,8 @@ struct State {
     opacity: u8,
     visible: bool,
     toggle_label: String,
+    /// Present only if a widget needs it; running only while the overlay is visible.
+    media: Option<MediaSource>,
 }
 
 thread_local! {
@@ -80,7 +85,11 @@ impl State {
     /// Redraw if anything changed (or `force`). Returns whether it drew.
     fn draw(&mut self, force: bool) -> Result<bool> {
         let (time, _) = local_time();
-        let ctx = Context { time };
+        let ctx = Context {
+            time,
+            now: Instant::now(),
+            media: self.media.as_ref().and_then(|m| m.snapshot()),
+        };
         let mut changed = force;
         for w in &mut self.widgets {
             changed |= w.update(&ctx);
@@ -161,6 +170,9 @@ impl State {
         if self.widgets.is_empty() {
             return;
         }
+        if let Some(m) = &mut self.media {
+            m.start(self.control);
+        }
         let _ = self.draw(true);
         // SAFETY: valid overlay window. Re-asserting TOPMOST keeps us above
         // borderless-fullscreen windows that took the top spot meanwhile.
@@ -186,7 +198,19 @@ impl State {
             let _ = KillTimer(Some(self.control), TIMER_ID);
             let _ = ShowWindow(self.overlay, SW_HIDE);
         }
+        if let Some(m) = &mut self.media {
+            m.stop();
+        }
         self.visible = false;
+    }
+
+    /// The media session changed: redraw now and re-plan the timer (play/pause
+    /// changes how often the widget wants updates).
+    fn on_media_changed(&mut self) {
+        if self.visible {
+            let _ = self.draw(false);
+            self.schedule();
+        }
     }
 
     fn toggle(&mut self) {
@@ -246,6 +270,10 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
         }
         WM_HOTKEY if wp.0 as i32 == HOTKEY_ID => {
             with_state(|s| s.toggle());
+            LRESULT(0)
+        }
+        WM_MEDIA_CHANGED => {
+            with_state(|s| s.on_media_changed());
             LRESULT(0)
         }
         tray::WM_TRAY => {
@@ -350,6 +378,7 @@ fn run_inner(app: App) -> Result<()> {
         scale: o.scale * dpi_scale,
         text: Color::new(1.0, 1.0, 1.0, 1.0),
         background: Color::new(0.05, 0.05, 0.08, 0.7),
+        accent: Color::new(0.3, 0.8, 0.5, 1.0),
     };
 
     // Size the overlay from the widgets' own measurements.
@@ -450,7 +479,9 @@ fn run_inner(app: App) -> Result<()> {
     };
 
     let start_visible = config.overlay.start_visible;
+    let needs_media = widgets.iter().any(|w| w.sources().contains(&Source::Media));
     let state = State {
+        media: needs_media.then(MediaSource::new),
         control,
         overlay,
         surface: Surface::new(win_w, win_h)?,

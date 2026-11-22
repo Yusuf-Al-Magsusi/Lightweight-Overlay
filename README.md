@@ -4,7 +4,11 @@
 
 A free, open-source, lightweight game overlay for Windows. It draws a transparent, click-through, always-on-top window with small widgets (now playing, clock, FPS, CPU/GPU stats) over games and full-screen apps. Portable single `.exe`, no installer, no account.
 
-**Status: pre-alpha (Milestone 1). Only a clock widget exists so far.**
+**Status: pre-alpha (Milestone 2). Clock and Now Playing widgets exist so far.**
+
+Widgets:
+- **Clock**: local time.
+- **Now Playing**: title, artist, progress bar with times and play state, from whatever app Windows treats as the current media session (Spotify, browsers, VLC and others). No network access; it reads the Windows media session only.
 
 ## Try it (from source)
 
@@ -41,7 +45,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-`scripts/smoke-test.ps1` runs the built exe against a temporary config and checks the window, hotkey, single-instance and quit behaviour. See `docs/decisions.md` for design decisions and `docs/game-test-checklist.md` for manual game testing.
+`scripts/smoke-test.ps1` runs the built exe against a temporary config and checks the window, hotkey, single-instance and quit behaviour. `scripts/media-test.ps1` tests the Now Playing widget with a fake media player (`cargo build --example fake_media` first). See `docs/decisions.md` for design decisions and `docs/game-test-checklist.md` for manual game testing.
 
 ## License
 
