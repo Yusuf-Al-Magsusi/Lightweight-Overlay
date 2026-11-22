@@ -136,13 +136,12 @@ impl State {
             let run = match pass {
                 Pass::Force => true,
                 Pass::Media => p.uses_media(),
-                Pass::Due => now + DUE_TOLERANCE >= p.next_due,
+                Pass::Due => p.is_due(now, DUE_TOLERANCE),
             };
             if !run {
                 continue;
             }
-            p.next_due = now + p.interval();
-            let changed = p.widget.update(&ctx);
+            let changed = p.update(&ctx);
             let want = editing || p.widget.visible();
             // Paint before showing so a window never appears blank.
             if want && (changed || pass == Pass::Force || !p.is_shown()) {
@@ -160,7 +159,7 @@ impl State {
         let soonest = self
             .panels
             .iter()
-            .map(|p| p.next_due.saturating_duration_since(now))
+            .map(|p| p.next_due().saturating_duration_since(now))
             .min()
             .unwrap_or(Duration::from_secs(1));
         let soonest_ms = soonest.as_millis().min(u128::from(u32::MAX)) as u32;

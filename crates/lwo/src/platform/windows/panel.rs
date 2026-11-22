@@ -7,7 +7,8 @@
 use std::time::{Duration, Instant};
 
 use lwo_core::layout::Rect;
-use lwo_core::widget::{Color, Style, Widget};
+use lwo_core::schedule::Refresh;
+use lwo_core::widget::{Color, Context, Style, Widget};
 use windows::core::{Result, HSTRING};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, POINT, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION};
@@ -20,9 +21,8 @@ pub struct Panel {
     pub widget: Box<dyn Widget>,
     pub hwnd: HWND,
     surface: Surface,
-    /// The slowest this widget may be updated (from its `refresh_seconds`).
-    min_interval: Duration,
-    pub next_due: Instant,
+    /// When this widget is next due for an update.
+    refresh: Refresh,
     shown: bool,
 }
 
@@ -63,16 +63,29 @@ impl Panel {
             widget,
             hwnd,
             surface,
-            min_interval,
-            next_due: Instant::now(),
+            refresh: Refresh::new(min_interval, Instant::now()),
             shown: false,
         })
     }
 
-    /// How long until this widget wants its next update: what the widget asks
-    /// for, but never faster than the user's refresh setting.
+    /// How long this widget wants between updates right now: what it asks for,
+    /// but never faster than the user's refresh setting.
     pub fn interval(&self) -> Duration {
-        self.widget.refresh_interval().max(self.min_interval)
+        self.refresh.interval(&*self.widget)
+    }
+
+    pub fn next_due(&self) -> Instant {
+        self.refresh.next_due()
+    }
+
+    pub fn is_due(&self, now: Instant, tolerance: Duration) -> bool {
+        self.refresh.is_due(now, tolerance)
+    }
+
+    /// Update the widget and plan its next update from its state *afterwards*
+    /// (see `lwo_core::schedule`). Returns whether what it draws changed.
+    pub fn update(&mut self, ctx: &Context) -> bool {
+        self.refresh.update(&mut *self.widget, ctx)
     }
 
     pub fn uses_media(&self) -> bool {

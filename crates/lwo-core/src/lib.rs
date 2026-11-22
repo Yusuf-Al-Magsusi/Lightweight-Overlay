@@ -11,6 +11,7 @@ pub mod form;
 pub mod hotkey;
 pub mod layout;
 pub mod now_playing;
+pub mod schedule;
 pub mod stats;
 pub mod theme;
 pub mod units;
