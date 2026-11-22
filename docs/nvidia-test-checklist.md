@@ -16,7 +16,8 @@ The GPU widget reads NVIDIA's NVML library (part of the normal NVIDIA driver). T
 3. **Updates.** Values change about once per second under load.
 4. **Hide and show** with Ctrl+Alt+O: the panel comes back with fresh values, and the app does not grow in memory after many toggles.
 5. **Multiple GPUs.** Only GPU 0 is shown. Note which GPU `nvidia-smi` lists as index 0.
-6. **No NVIDIA driver** (or on an AMD/Intel PC): the GPU panel is simply absent, with no error or balloon. This one is verified on the AMD dev machine.
+6. **No NVIDIA driver** (or on an AMD/Intel PC): the panel falls back to the generic Windows counters and shows only load and VRAM (no temperature or power row). This is verified on the AMD dev machine, including under real load.
+7. **NVIDIA wins over the generic path.** On an NVIDIA PC the temperature and power row must be present. If it is missing, NVML failed to load and the generic path took over; tell us.
 
 ## Report back
 Card model, driver version, whether each check passed, and any wrong value with the `nvidia-smi` value next to it.

@@ -146,9 +146,34 @@ Previous milestone for comparison: 15.6 MB and 0.002% CPU with two widgets. The 
 - NVML (`nvml.dll`) comes with the NVIDIA driver and is user-mode. We load it with `LoadLibraryExW` and look up seven functions with `GetProcAddress`, using the signatures from `nvml.h` (`nvmlInit_v2`, `nvmlShutdown`, `nvmlDeviceGetHandleByIndex_v2`, `nvmlDeviceGetTemperature`, `nvmlDeviceGetPowerUsage`, `nvmlDeviceGetUtilizationRates`, `nvmlDeviceGetMemoryInfo`). This avoids a crate such as `nvml-wrapper` (and its own loader dependency) for what is a very small surface.
 - Search path: the Windows system folder first, then NVIDIA's old install folder by absolute path. Never the application or current folder, so a planted `nvml.dll` beside the exe is not loaded.
 - Shown: GPU 0 only: load %, temperature (C), power (W), VRAM used / total. Clocks are not shown. Power is optional (`-- W` where the driver doesn't report it).
-- Lazy: the widget is dropped at startup if NVML can't be loaded and initialised (no NVIDIA driver, or AMD/Intel GPU): no error, no balloon, no empty panel. While the overlay is visible NVML is loaded and initialised; hiding the overlay shuts it down and unloads it (verified: the module is gone while hidden).
+- Lazy: while the overlay is visible NVML is loaded and initialised; hiding the overlay shuts it down and unloads it (verified: the module is gone while hidden). **Superseded in part by D16:** when NVML can't be loaded (no NVIDIA driver, or an AMD/Intel GPU) the widget is no longer dropped; it falls back to the generic counters provider, and is dropped only if that fails too.
 - **Not tested against real NVIDIA hardware** (the dev machine has an AMD GPU). Tested against `crates/fake-nvml`, a dev-only fake `nvml.dll` that follows `nvml.h`; this verifies loading, calling, struct plumbing, unloading, and the widget. It cannot catch a mistake in my reading of `nvml.h`. Manual checklist: `docs/nvidia-test-checklist.md`.
 - Debug builds only (`cfg(debug_assertions)`) honour `LWO_NVML_PATH` to load a different library. Release builds never read it, so the shipped exe has no environment-variable hook that could load an arbitrary library.
+
+## D16: Vendor-neutral GPU provider chain (Milestone 3.5, on the milestone-3 branch)
+- The GPU widget now works on any GPU. `GpuSource` tries NVML first (load, temperature, power, VRAM), then Windows performance counters (load and VRAM only). The old `D13` NVML design is unchanged and still first in the chain.
+- Counters used: `\GPU Engine(*)\Utilization Percentage` and `\GPU Adapter Memory(*)\Dedicated Usage` (the same data Task Manager shows), opened with the English counter names so non-English Windows works, through PDH. User-mode, no driver, no admin. No new crates: PDH and DXGI come from the `windows` crate.
+- Load = sum the instances of each engine type on the adapter (3D, Copy, Video Decode ...) and take the busiest type, clamped to 100. This is Task Manager's definition.
+- VRAM used comes from the counters; **VRAM total comes from DXGI `DedicatedVideoMemory`**, not from WMI's `AdapterRAM`, which is a 32-bit field and misreports cards over 4 GB.
+- **Adapter choice.** Real (non-software, non-Microsoft) adapters ranked by dedicated VRAM, then the first one that actually appears in the counters. This second step is needed: on the dev machine DXGI lists the RX 9070 XT **twice** under different LUIDs (equal VRAM), and only one has counter data. Choosing by VRAM alone picked the wrong twin and the live test caught it.
+- The panel's shape is fixed at startup: the platform probes the provider and calls `Widget::configure` with a `SourceInfo`. With the generic provider the temperature / power row is omitted entirely (not shown as dashes). `GpuStats::temperature_c` is now optional.
+- Lazy: the counter query is opened when the overlay is shown and closed when hidden. A startup probe opens and drops a provider. If no provider works (no GPU, a VM, or only the software renderer), the widget is dropped quietly.
+- Known limits: only one adapter is shown (no choice yet); integrated GPUs report small dedicated memory, so their VRAM figure is not meaningful; hybrid-GPU laptops may pick the integrated or discrete GPU by VRAM and counters only; Windows 10 1709 or later is needed for the GPU counters.
+- Verified on the AMD dev machine: live counters give sane values (unit test), and under a real Direct3D compute stress (`crates/lwo/examples/gpu_load.rs`) the panel read 46% while an independent calculation of the same counters read 45.9% and 45.8%; it returned to 0% afterwards and VRAM moved with the load.
+- Test correction: the NVML unit test that loads `fake_nvml.dll` had been **silently skipping** since Milestone 3, because this Cargo version runs test executables from a nested build folder and my path guess was wrong. The end-to-end run with the fake DLL (visual test) did cover that code path, but the unit test did not run. It now searches upward for the DLL, and fails (instead of skipping) when the `CI` environment variable is set.
+
+## Measurements: Milestone 3.5 (clock, Now Playing, CPU, memory, GPU via counters)
+Same method as before (5 min idle, 60 s sampled, `scripts/measure-overlay.ps1`), release build, one run, Windows 11, AMD RX 9070 XT. Five panels visible, GPU provider is the generic counters (about 170 counter instances read per second). Spotify was paused, so Now Playing was idle.
+
+| Metric | Result | Before the GPU panel (Milestone 3) | Target |
+|---|---|---|---|
+| Private working set (Task Manager "Memory") | 20.9 MB | 16.4 MB | under 30 MB |
+| CPU (% of all cores) | 0.016 | 0.006 | under 1 |
+| GPU engine use (avg / max %) | 0.008 / 0.009 | 0.008 / 0.016 | none |
+| Exe size | 0.42 MB | 0.41 MB | n/a |
+| Threads / handles | 25 / 818 | 25 / 807 | n/a |
+
+Both are still well inside the targets, but the GPU counters cost about 4.5 MB of memory (PDH and its wildcard counter buffers) and a little CPU. Hide/show stress on this provider: 80 toggles kept handles flat (824 to 823) and private working set at 21.0 to 21.4 MB, so open/close does not leak. Not checked: growth over hours, or cost on machines with many more counter instances. If memory becomes a concern, the options are reading the counters less often, or switching to D3DKMT.
 
 ## D14: Lazy source manager (Milestone 3)
 - `Sources` in the Windows platform module holds one entry per source type, created only if some enabled widget declares it through `Widget::sources()` (`Media`, `Cpu`, `Memory`, `Gpu`).
@@ -159,7 +184,7 @@ Previous milestone for comparison: 15.6 MB and 0.002% CPU with two widgets. The 
 
 ## D15: Stat panels (Milestone 3)
 - CPU, Memory and GPU are separate widgets sharing one compact layout (label, large value, bar, optional detail lines). Each has a fixed width (150, 200 and 220 px at scale 1.0) so windows never resize.
-- Config: `[widgets.cpu]`, `[widgets.ram]`, `[widgets.gpu]`, each `enabled` (default true). The GPU widget is on by default but only appears where NVML exists.
+- Config: `[widgets.cpu]`, `[widgets.ram]`, `[widgets.gpu]`, each `enabled` (default true). The GPU widget is on by default and appears wherever a GPU provider works (D16).
 - Temperature is shown in Celsius only until the units setting arrives in Milestone 4.
 - Defaults now stack four panels (clock, Now Playing, CPU, memory), about 380 px tall at 100% scale. A layout and "compact mode" are part of the settings milestone.
 

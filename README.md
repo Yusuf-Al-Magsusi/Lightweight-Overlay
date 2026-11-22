@@ -9,7 +9,7 @@ A free, open-source, lightweight game overlay for Windows. It draws a transparen
 Widgets:
 - **Clock**: local time.
 - **CPU** and **Memory**: overall CPU load and physical memory use, read with ordinary Windows calls (no driver, no admin).
-- **GPU (NVIDIA)**: load, temperature, power and VRAM through NVIDIA's NVML library, loaded at runtime. It only appears if an NVIDIA driver is installed; otherwise it is quietly hidden. Not yet tested on real NVIDIA hardware (see `docs/nvidia-test-checklist.md`).
+- **GPU**: load and VRAM on any GPU (AMD, Intel or NVIDIA) from the same Windows counters Task Manager uses. On NVIDIA it also shows temperature and power through NVIDIA's NVML library, loaded at runtime. Hidden quietly if no GPU source works (for example in a virtual machine). The AMD path is tested on real hardware; the NVIDIA path is not yet (see `docs/nvidia-test-checklist.md`).
 - **Now Playing**: title, artist, progress bar with times and play state, from whatever app Windows treats as the current media session (Spotify, browsers, VLC and others). No network access; it reads the Windows media session only.
 
 ## Try it (from source)
@@ -47,7 +47,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-`scripts/smoke-test.ps1` runs the built exe against a temporary config and checks the window, hotkey, single-instance and quit behaviour. `scripts/media-test.ps1` tests the Now Playing widget with a fake media player (`cargo build --example fake_media` first). `scripts/stats-test.ps1` tests the CPU, memory and GPU panels, using a fake `nvml.dll` (`crates/fake-nvml`) for the GPU. Run `cargo build --workspace` before `cargo test` so the fake library exists; one NVML test is skipped otherwise. See `docs/decisions.md` for design decisions and `docs/game-test-checklist.md` for manual game testing.
+`scripts/smoke-test.ps1` runs the built exe against a temporary config and checks the window, hotkey, single-instance and quit behaviour. `scripts/media-test.ps1` tests the Now Playing widget with a fake media player (`cargo build --example fake_media` first). `scripts/stats-test.ps1` tests the CPU, memory and GPU panels, using a fake `nvml.dll` (`crates/fake-nvml`) for the NVIDIA path, and `cargo run --example gpu_load` generates real GPU load for the generic path. Run `cargo build --workspace` before `cargo test` so the fake library exists (the NVML test is skipped locally, and fails when `CI` is set, if it is missing). See `docs/decisions.md` for design decisions and `docs/game-test-checklist.md` for manual game testing.
 
 ## License
 
