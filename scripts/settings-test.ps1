@@ -92,7 +92,7 @@ try {
     Check "Settings opens a dialog" ($dlg -ne [IntPtr]::Zero)
     $parts = Parts $dlg
     if ($env:LWO_DEBUG) { Write-Host "dialog handle: $dlg"; ([S]::Children($dlg) | Select-Object Cls, Text, Style | Format-Table | Out-String) | Write-Host }
-    Check "dialog has the expected controls (14 edits, 10 check boxes, 2 drop-downs)" ($parts.Edits.Count -eq 14 -and $parts.Checks.Count -eq 10 -and $parts.Combos.Count -eq 2) "$($parts.Edits.Count) / $($parts.Checks.Count) / $($parts.Combos.Count)"
+    Check "dialog has the expected controls (14 edits, 11 check boxes, 2 drop-downs)" ($parts.Edits.Count -eq 14 -and $parts.Checks.Count -eq 11 -and $parts.Combos.Count -eq 2) "$($parts.Edits.Count) / $($parts.Checks.Count) / $($parts.Combos.Count)"
     $dr = New-Object S+RECT; [void][S]::GetWindowRect($dlg, [ref]$dr); Snap "1-dialog-defaults" $dr
     Check "fields start with the saved values" ((Read-Edit $parts.Edits[6]) -eq "100" -and (Read-Edit $parts.Edits[8]) -eq "Segoe UI" -and (Read-Edit $parts.Edits[12]) -eq "Ctrl+Alt+O") "scale '$(Read-Edit $parts.Edits[6])' font '$(Read-Edit $parts.Edits[8])' hotkey '$(Read-Edit $parts.Edits[12])'"
 
