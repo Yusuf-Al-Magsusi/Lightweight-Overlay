@@ -8,7 +8,7 @@
 //! to the system, so it must be stopped: `Drop` does that, and a leftover from
 //! a killed run is stopped before a new one starts.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -33,12 +33,17 @@ const DXGKRNL_PRESENT_INFO: u16 = 184;
 
 /// The frame rate is counted over this long...
 const WINDOW: Duration = Duration::from_millis(1000);
-/// ...ending this long ago. Events are delivered in batches about once a second
-/// (the session's flush timer), and measured on the dev PC they arrive 1.3 s after
-/// the frame typically and up to 2.2 s. A shorter delay counts a window that has
-/// not fully arrived and reads far too low (the accuracy test caught exactly that).
-/// So the number shown describes the second that ended about 2.5 s ago.
-const DELIVERY_DELAY: Duration = Duration::from_millis(2500);
+/// ...ending this long ago, so that its events have all arrived.
+///
+/// Left alone, Windows delivers events about once a second and, measured on the
+/// dev PC, they arrive up to 2.2 s after the frame (a first version assumed 1.2 s
+/// and read 30 fps as 12 to 18, which the accuracy test caught). So the session
+/// is asked to flush every `FLUSH_EVERY`, which cut the lag to 0.36 s typical
+/// and 0.58 s worst case; this delay leaves a margin above that.
+const DELIVERY_DELAY: Duration = Duration::from_millis(800);
+/// How often the buffered events are pushed out. The thread doing it exists only
+/// while the FPS widget is on screen.
+const FLUSH_EVERY: Duration = Duration::from_millis(200);
 
 type Shared = Mutex<FrameCounter>;
 
@@ -125,6 +130,20 @@ fn stop_by_name(name: &[u16]) {
     }
 }
 
+/// Ask Windows to deliver whatever is sitting in the session's buffers now.
+fn flush(name: &[u16]) {
+    let mut props = Properties::new();
+    // SAFETY: valid properties and NUL-terminated name.
+    unsafe {
+        let _ = ControlTraceW(
+            CONTROLTRACE_HANDLE::default(),
+            PCWSTR(name.as_ptr()),
+            props.ptr(),
+            EVENT_TRACE_CONTROL_FLUSH,
+        );
+    }
+}
+
 pub fn stop_leftover_session() {
     stop_by_name(&session_name());
 }
@@ -175,6 +194,8 @@ pub struct EtwFrames {
     /// The extra reference handed to the callback; released after the consumer ends.
     callback_ref: *const Shared,
     consumer: Option<JoinHandle<()>>,
+    /// Pushes buffered events out regularly; dropping the sender ends it.
+    flusher: Option<(mpsc::Sender<()>, JoinHandle<()>)>,
 }
 
 impl EtwFrames {
@@ -235,12 +256,22 @@ impl EtwFrames {
             }
         });
 
+        let (stop_flushing, stopped) = mpsc::channel::<()>();
+        let flush_name = name.clone();
+        let flusher = std::thread::spawn(move || {
+            // Waits on the channel, so it ends at once when the sender is dropped.
+            while stopped.recv_timeout(FLUSH_EVERY) == Err(mpsc::RecvTimeoutError::Timeout) {
+                flush(&flush_name);
+            }
+        });
+
         Some(Self {
             name,
             trace,
             shared,
             callback_ref,
             consumer: Some(consumer),
+            flusher: Some((stop_flushing, flusher)),
         })
     }
 }
@@ -274,6 +305,10 @@ impl FrameSource for EtwFrames {
 
 impl Drop for EtwFrames {
     fn drop(&mut self) {
+        if let Some((stop, thread)) = self.flusher.take() {
+            drop(stop);
+            let _ = thread.join();
+        }
         // Stopping the session makes `ProcessTrace` return.
         stop_by_name(&self.name);
         if let Some(thread) = self.consumer.take() {
