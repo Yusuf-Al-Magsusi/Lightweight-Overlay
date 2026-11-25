@@ -578,6 +578,7 @@ mod tests {
     fn generic_gpu_provider_shows_load_and_vram_only() {
         let mut w = GpuWidget::new();
         w.configure(&SourceInfo {
+            fps: false,
             gpu: Some(GpuInfo {
                 has_temperature: false,
                 has_power: false,
@@ -597,6 +598,7 @@ mod tests {
         let full = GpuWidget::new();
         let mut generic = GpuWidget::new();
         generic.configure(&SourceInfo {
+            fps: false,
             gpu: Some(GpuInfo::default()),
         });
         let (wf, hf) = full.size(&FixedMeasure, &style);
@@ -609,6 +611,7 @@ mod tests {
     fn temperature_only_provider_shows_just_that_part() {
         let mut w = GpuWidget::new();
         w.configure(&SourceInfo {
+            fps: false,
             gpu: Some(GpuInfo {
                 has_temperature: true,
                 has_power: false,
@@ -652,7 +655,10 @@ mod tests {
     #[test]
     fn configure_without_a_gpu_keeps_defaults() {
         let mut w = GpuWidget::new();
-        w.configure(&SourceInfo { gpu: None });
+        w.configure(&SourceInfo {
+            fps: false,
+            gpu: None,
+        });
         assert!(w.info.has_temperature && w.info.has_power);
     }
 
