@@ -146,43 +146,61 @@ fn percent(p: f32) -> u8 {
 
 // ---------------------------------------------------------------- CPU
 
+/// CPU load, plus package power where Windows reports it.
 pub struct CpuWidget {
+    /// The user wants power shown.
+    show_power: bool,
+    /// This machine reports it (learned at startup).
+    power_available: bool,
     view: View,
 }
 
-const CPU_SHAPE: Shape = Shape {
-    label: "CPU",
-    width: 150.0,
-    has_bar: true,
-    detail_lines: 0,
-};
-
 impl CpuWidget {
-    pub fn new() -> Self {
+    pub fn new(show_power: bool) -> Self {
         Self {
+            show_power,
+            power_available: false,
             view: View::default(),
         }
     }
 
-    fn view_for(ctx: &Context) -> View {
+    /// The power row exists only if wanted and reported here, so a PC without it
+    /// gets the same compact panel as before rather than a row of dashes.
+    fn has_power_row(&self) -> bool {
+        self.show_power && self.power_available
+    }
+
+    fn shape(&self) -> Shape {
+        Shape {
+            label: "CPU",
+            width: 150.0,
+            has_bar: true,
+            detail_lines: usize::from(self.has_power_row()),
+        }
+    }
+
+    fn view_for(&self, ctx: &Context) -> View {
+        let details = if self.has_power_row() {
+            let watts = ctx
+                .stats
+                .cpu_power_watts
+                .map_or_else(|| NA.to_string(), |w| format!("{w:.0}"));
+            vec![format!("{watts} W")]
+        } else {
+            vec![]
+        };
         match ctx.stats.cpu_load_percent {
             Some(p) => View {
                 headline: format!("{}%", percent(p)),
                 bar: Some(percent(p)),
-                details: vec![],
+                details,
             },
             None => View {
                 headline: format!("{NA}%"),
                 bar: None,
-                details: vec![],
+                details,
             },
         }
-    }
-}
-
-impl Default for CpuWidget {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -194,13 +212,20 @@ impl Widget for CpuWidget {
         "CPU load"
     }
     fn sources(&self) -> &'static [Source] {
-        &[Source::Cpu]
+        if self.has_power_row() {
+            &[Source::Cpu, Source::CpuPower]
+        } else {
+            &[Source::Cpu]
+        }
+    }
+    fn configure(&mut self, info: &SourceInfo) {
+        self.power_available = info.cpu_power;
     }
     fn refresh_interval(&self) -> Duration {
         Duration::from_secs(1)
     }
     fn update(&mut self, ctx: &Context) -> bool {
-        let next = Self::view_for(ctx);
+        let next = self.view_for(ctx);
         if next == self.view {
             return false;
         }
@@ -208,11 +233,11 @@ impl Widget for CpuWidget {
         true
     }
     fn size(&self, measure: &dyn TextMeasure, style: &Style) -> (f32, f32) {
-        let l = layout(&CPU_SHAPE, measure, style);
+        let l = layout(&self.shape(), measure, style);
         (l.w, l.h)
     }
     fn render(&self, canvas: &mut dyn Canvas, style: &Style) {
-        draw(&CPU_SHAPE, &self.view, canvas, style);
+        draw(&self.shape(), &self.view, canvas, style);
     }
 }
 
@@ -447,7 +472,7 @@ mod tests {
 
     #[test]
     fn cpu_shows_dashes_until_a_value_arrives_then_redraws_only_on_whole_percent_change() {
-        let mut w = CpuWidget::new();
+        let mut w = CpuWidget::new(false);
         assert!(w.update(&ctx(Stats::default())));
         assert_eq!(w.view.headline, "--%");
         assert!(!w.update(&ctx(Stats::default())));
@@ -467,9 +492,65 @@ mod tests {
         assert!(w.update(&with(24.0)));
     }
 
+    fn power_info(available: bool) -> SourceInfo {
+        SourceInfo {
+            cpu_power: available,
+            ..SourceInfo::default()
+        }
+    }
+
+    fn with_power(watts: Option<f32>) -> Context {
+        ctx(Stats {
+            cpu_load_percent: Some(20.0),
+            cpu_power_watts: watts,
+            ..Stats::default()
+        })
+    }
+
+    #[test]
+    fn cpu_power_row_shows_whole_watts_where_windows_reports_them() {
+        let mut w = CpuWidget::new(true);
+        w.configure(&power_info(true));
+        w.update(&with_power(Some(36.6)));
+        assert_eq!(w.view.details, vec!["37 W".to_string()]);
+        assert!(!w.update(&with_power(Some(37.2))), "still 37 W");
+        assert!(w.update(&with_power(None)));
+        assert_eq!(w.view.details, vec!["-- W".to_string()]);
+        assert_eq!(w.sources(), &[Source::Cpu, Source::CpuPower]);
+    }
+
+    #[test]
+    fn a_pc_without_power_readings_gets_no_power_row_and_asks_for_no_source() {
+        let mut w = CpuWidget::new(true);
+        w.configure(&power_info(false));
+        w.update(&with_power(Some(36.0)));
+        assert!(w.view.details.is_empty());
+        assert_eq!(w.sources(), &[Source::Cpu]);
+    }
+
+    #[test]
+    fn switching_power_off_removes_the_row_and_the_source() {
+        let mut w = CpuWidget::new(false);
+        w.configure(&power_info(true));
+        w.update(&with_power(Some(36.0)));
+        assert!(w.view.details.is_empty());
+        assert_eq!(w.sources(), &[Source::Cpu]);
+    }
+
+    #[test]
+    fn the_panel_is_taller_only_when_the_power_row_exists() {
+        let style = test_style();
+        let mut with = CpuWidget::new(true);
+        with.configure(&power_info(true));
+        let without = CpuWidget::new(true);
+        let (w1, h1) = with.size(&FixedMeasure, &style);
+        let (w0, h0) = without.size(&FixedMeasure, &style);
+        assert_eq!(w1, w0);
+        assert!(h1 > h0);
+    }
     #[test]
     fn cpu_percent_is_clamped() {
-        let mut w = CpuWidget::new();
+        let mut w = CpuWidget::new(false);
         w.update(&ctx(Stats {
             cpu_load_percent: Some(180.0),
             ..Stats::default()
@@ -578,6 +659,7 @@ mod tests {
     fn generic_gpu_provider_shows_load_and_vram_only() {
         let mut w = GpuWidget::new();
         w.configure(&SourceInfo {
+            cpu_power: false,
             fps: false,
             gpu: Some(GpuInfo {
                 has_temperature: false,
@@ -598,6 +680,7 @@ mod tests {
         let full = GpuWidget::new();
         let mut generic = GpuWidget::new();
         generic.configure(&SourceInfo {
+            cpu_power: false,
             fps: false,
             gpu: Some(GpuInfo::default()),
         });
@@ -611,6 +694,7 @@ mod tests {
     fn temperature_only_provider_shows_just_that_part() {
         let mut w = GpuWidget::new();
         w.configure(&SourceInfo {
+            cpu_power: false,
             fps: false,
             gpu: Some(GpuInfo {
                 has_temperature: true,
@@ -656,6 +740,7 @@ mod tests {
     fn configure_without_a_gpu_keeps_defaults() {
         let mut w = GpuWidget::new();
         w.configure(&SourceInfo {
+            cpu_power: false,
             fps: false,
             gpu: None,
         });
@@ -672,7 +757,7 @@ mod tests {
 
     #[test]
     fn widgets_declare_their_sources() {
-        assert_eq!(CpuWidget::new().sources(), &[Source::Cpu]);
+        assert_eq!(CpuWidget::new(false).sources(), &[Source::Cpu]);
         assert_eq!(RamWidget::new().sources(), &[Source::Memory]);
         assert_eq!(GpuWidget::new().sources(), &[Source::Gpu]);
     }

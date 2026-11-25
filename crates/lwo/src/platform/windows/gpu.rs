@@ -267,7 +267,7 @@ impl Drop for Counters {
 }
 
 /// Read every instance of a wildcard counter as `(instance name, value)`.
-fn read_items(counter: PDH_HCOUNTER, buf: &mut Vec<u64>) -> Option<Vec<(String, f64)>> {
+pub(super) fn read_items(counter: PDH_HCOUNTER, buf: &mut Vec<u64>) -> Option<Vec<(String, f64)>> {
     let mut bytes: u32 = (buf.len() * 8) as u32;
     let mut count: u32 = 0;
     // The first call may report the needed size; retry once with a bigger buffer.

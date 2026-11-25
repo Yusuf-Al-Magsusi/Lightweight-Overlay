@@ -21,6 +21,7 @@ pub struct SettingsForm {
 
     pub cpu_enabled: bool,
     pub cpu_refresh: String,
+    pub cpu_power: bool,
     pub ram_enabled: bool,
     pub ram_refresh: String,
     pub gpu_enabled: bool,
@@ -75,6 +76,7 @@ impl SettingsForm {
             now_playing_hide_idle: w.now_playing.hide_when_idle,
             cpu_enabled: w.cpu.enabled,
             cpu_refresh: w.cpu.refresh_seconds.to_string(),
+            cpu_power: w.cpu.show_power,
             ram_enabled: w.ram.enabled,
             ram_refresh: w.ram.refresh_seconds.to_string(),
             gpu_enabled: w.gpu.enabled,
@@ -151,6 +153,7 @@ impl SettingsForm {
         w.now_playing.hide_when_idle = self.now_playing_hide_idle;
         w.cpu.enabled = self.cpu_enabled;
         w.cpu.refresh_seconds = cpu;
+        w.cpu.show_power = self.cpu_power;
         w.ram.enabled = self.ram_enabled;
         w.ram.refresh_seconds = ram;
         w.gpu.enabled = self.gpu_enabled;

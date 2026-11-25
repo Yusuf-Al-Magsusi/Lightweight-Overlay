@@ -11,6 +11,7 @@ use windows::Win32::Foundation::HWND;
 use super::frames::{self, FrameSource};
 use super::gpu::GpuSource;
 use super::media::MediaSource;
+use super::power::CpuPower;
 use super::sensors::{read_memory, CpuSampler};
 
 /// What this machine's sources can provide, learned once at startup. A GPU
@@ -20,6 +21,7 @@ pub fn probe_sources() -> SourceInfo {
     SourceInfo {
         gpu: GpuSource::open().map(|g| g.info()),
         fps: frames::available(),
+        cpu_power: CpuPower::open().is_some(),
     }
 }
 
@@ -28,6 +30,8 @@ const LOSS_CHECK_EVERY: u32 = 10;
 pub struct Sources {
     media: Option<MediaSource>,
     cpu: Option<CpuSampler>,
+    power_wanted: bool,
+    power: Option<CpuPower>,
     memory: bool,
     gpu_wanted: bool,
     gpu: Option<GpuSource>,
@@ -43,6 +47,8 @@ impl Sources {
         Self {
             media: wants(Source::Media).then(MediaSource::new),
             cpu: wants(Source::Cpu).then(CpuSampler::new),
+            power_wanted: wants(Source::CpuPower),
+            power: None,
             memory: wants(Source::Memory),
             gpu_wanted: wants(Source::Gpu),
             gpu: None,
@@ -60,6 +66,9 @@ impl Sources {
         if let Some(c) = &mut self.cpu {
             c.reset();
         }
+        if self.power_wanted && self.power.is_none() {
+            self.power = CpuPower::open();
+        }
         if self.gpu_wanted && self.gpu.is_none() {
             self.gpu = GpuSource::open();
         }
@@ -72,6 +81,7 @@ impl Sources {
         if let Some(m) = &mut self.media {
             m.stop();
         }
+        self.power = None; // closes its counter query
         self.gpu = None; // shuts NVML down and unloads it, or closes the counter query
         self.frames = None; // stops the Windows tracing session
     }
@@ -80,6 +90,7 @@ impl Sources {
     pub fn poll(&mut self) -> Stats {
         Stats {
             cpu_load_percent: self.cpu.as_mut().and_then(CpuSampler::sample),
+            cpu_power_watts: self.power.as_mut().and_then(CpuPower::read),
             ram: if self.memory { read_memory() } else { None },
             gpu: self.gpu.as_mut().and_then(GpuSource::read),
             fps: self

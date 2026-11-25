@@ -158,7 +158,26 @@ impl Default for FpsConfig {
     }
 }
 
-/// Settings shared by the stat widgets (CPU, memory, GPU).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CpuConfig {
+    pub enabled: bool,
+    pub refresh_seconds: u32,
+    /// Show CPU package power where Windows reports it (hidden elsewhere).
+    pub show_power: bool,
+}
+
+impl Default for CpuConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            refresh_seconds: DEFAULT_REFRESH_SECONDS,
+            show_power: true,
+        }
+    }
+}
+
+/// Settings shared by the stat widgets (memory, GPU).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToggleConfig {
@@ -180,7 +199,7 @@ impl Default for ToggleConfig {
 pub struct WidgetsConfig {
     pub clock: ClockConfig,
     pub now_playing: NowPlayingConfig,
-    pub cpu: ToggleConfig,
+    pub cpu: CpuConfig,
     pub ram: ToggleConfig,
     /// NVIDIA GPU. Quietly hidden when no NVIDIA driver (NVML) is installed.
     pub gpu: ToggleConfig,

@@ -8,7 +8,7 @@ A free, open-source, lightweight game overlay for Windows. It draws a transparen
 
 Widgets:
 - **Clock**: local time.
-- **CPU** and **Memory**: overall CPU load and physical memory use, read with ordinary Windows calls (no driver, no admin).
+- **CPU** and **Memory**: overall CPU load (plus CPU power in watts where Windows reports it) and physical memory use, read with ordinary Windows features (no driver of ours, no admin).
 - **GPU**: load and VRAM on any GPU (AMD, Intel or NVIDIA) from the same Windows counters Task Manager uses. On NVIDIA it also shows temperature and power through NVIDIA's NVML library, loaded at runtime. Hidden quietly if no GPU source works (for example in a virtual machine). The AMD path is tested on real hardware; the NVIDIA path is not yet (see `docs/nvidia-test-checklist.md`).
 - **Now Playing**: title, artist, progress bar with times and play state, from whatever app Windows treats as the current media session (Spotify, browsers, VLC and others). No network access; it reads the Windows media session only.
 
@@ -56,6 +56,11 @@ Know before relying on it:
 - Checked exactly against a test program at 30, 100 and 144 fps. With real games it is **not yet verified**; compare with your game's own counter.
 - **Anti-cheat: unknown.** The overlay doesn't touch or open the game, but nothing we found says how anti-cheat systems treat reading these events. Use at your own risk, especially in competitive games.
 
+## CPU power and temperature
+
+- **CPU power (watts):** shown in the CPU panel where Windows reports it. It comes from Windows' own energy meter, so nothing extra is installed or downloaded and no admin rights are needed. Checked on one PC (Windows 11, AMD Ryzen 7 7800X3D); other PCs may not report it, in which case the panel simply doesn't show it. Switch it off with **Show power** in Settings.
+- **CPU temperature: not available yet** (postponed; see `docs/deferred.md`). We found no driver-free way to read it. Reading it would mean installing a **kernel driver** (monitoring tools such as LibreHardwareMonitor use **PawnIO**), which is not built. FACEIT was reported (2025) to block that driver; its author reported this fixed in 2026, which we could not confirm with FACEIT. We found **no information** about Easy Anti-Cheat, BattlEye or Vanguard, which is not the same as being safe. Details: `docs/sensor-investigation.md`.
+- Only the **default install is driver-free**: it neither ships nor installs a driver, and it stays that way.
 ## Design goals
 
 - Light: target under 30 MB RAM and under 1% CPU idle with three widgets.
