@@ -25,6 +25,9 @@ public static class S {
   [DllImport("user32.dll", EntryPoint="SendMessageW")] public static extern IntPtr Send(IntPtr h, uint m, IntPtr w, IntPtr l);
   [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)] public static extern IntPtr SendText(IntPtr h, uint m, IntPtr w, string l);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
   [DllImport("user32.dll")] public static extern void keybd_event(byte v, byte s, uint f, UIntPtr e);
   public class Child { public IntPtr H; public string Cls; public string Text; public int Style; public int L, T; }
   public static List<Child> Children(IntPtr parent) { var r = new List<Child>();
@@ -141,7 +144,12 @@ try {
     $TRANSPARENT = 0x20
     $editing = @([S]::TopLevel([uint32]$p.Id, "-overlay", [NullString]::Value) | Where-Object { -not ([S]::GetWindowLong($_, -20) -band $TRANSPARENT) }).Count
     Check "edit mode can be entered while the dialog is open" ($editing -gt 0) "$editing editable windows"
-    $partsNow = Parts (Dialog $p.Id)
+    $dlgNow = Dialog $p.Id
+    $wr = New-Object S+RECT; [void][S]::GetWindowRect($dlgNow, [ref]$wr)
+    $mid = New-Object S+POINT; $mid.X = [int](($wr.L + $wr.R) / 2); $mid.Y = [int](($wr.T + $wr.B) / 2)
+    $top = [S]::GetAncestor([S]::WindowFromPoint($mid), 2)   # GA_ROOT
+    Check "the settings window stays above the edit-mode backdrop" ($top -eq $dlgNow) "window at its centre: $top, dialog: $dlgNow"
+    $partsNow = Parts $dlgNow
     Click-Async $partsNow.Buttons["Apply"]
     $stillEditable = @([S]::TopLevel([uint32]$p.Id, "-overlay", [NullString]::Value) | Where-Object { -not ([S]::GetWindowLong($_, -20) -band $TRANSPARENT) }).Count
     Check "Apply while editing ends edit mode and keeps the layout" ($stillEditable -eq 0 -and ((Get-Content $cfg -Raw) -match "\[layout\.")) "$stillEditable still editable"

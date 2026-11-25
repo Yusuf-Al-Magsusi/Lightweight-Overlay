@@ -7,6 +7,7 @@
 //! own refresh interval is due and redrawn only when it reports a change.
 //! Between events the thread blocks in `GetMessageW`.
 
+mod backdrop;
 mod canvas;
 mod frames;
 mod gpu;
@@ -37,6 +38,7 @@ use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+use self::backdrop::{Backdrop, WM_BACKDROP_CLICKED};
 use self::canvas::Gfx;
 use self::media::WM_MEDIA_CHANGED;
 use self::panel::Panel;
@@ -83,6 +85,8 @@ struct State {
     stats: Stats,
     visible: bool,
     editing: bool,
+    /// Present only in edit mode; clicking it ends edit mode.
+    backdrop: Option<Backdrop>,
     /// Edit mode was started while the overlay was hidden: hide it again afterwards.
     hide_after_edit: bool,
     toggle_label: String,
@@ -258,7 +262,14 @@ impl State {
         for p in &self.panels {
             p.set_click_through(false);
         }
+        // Without the backdrop, edit mode still works with the hotkey or tray.
+        self.backdrop = Backdrop::show(self.hinst, self.control).ok();
         self.update_panels(Pass::Force);
+        // The widgets, and an open settings window, go back above the backdrop.
+        for p in self.panels.iter().filter(|p| p.is_shown()) {
+            p.raise();
+        }
+        settings::raise();
     }
 
     /// Stop editing, make the windows click-through again and save where they are.
@@ -268,6 +279,7 @@ impl State {
         }
         self.editing = false;
         EDITING.store(false, Ordering::Relaxed);
+        self.backdrop = None;
         for p in &self.panels {
             p.set_click_through(true);
         }
@@ -526,6 +538,14 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
             }
             LRESULT(0)
         }
+        WM_BACKDROP_CLICKED => {
+            with_state(|s| {
+                if s.editing {
+                    s.toggle_edit();
+                }
+            });
+            LRESULT(0)
+        }
         WM_MEDIA_CHANGED => {
             with_state(|s| s.on_media_changed());
             LRESULT(0)
@@ -698,6 +718,7 @@ fn run_inner(app: App) -> Result<()> {
         stats: Stats::default(),
         visible: false,
         editing: false,
+        backdrop: None,
         hide_after_edit: false,
         toggle_label: String::new(),
         edit_label: String::new(),

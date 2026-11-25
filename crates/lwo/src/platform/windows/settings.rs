@@ -696,3 +696,23 @@ pub fn is_dialog_message(msg: &MSG) -> bool {
     // SAFETY: valid dialog window and message from the message loop.
     unsafe { IsDialogMessageW(hwnd, msg).as_bool() }
 }
+
+/// Keep an open settings window above other topmost windows (the edit-mode backdrop).
+pub fn raise() {
+    let Some(hwnd) = DIALOG.with(|d| d.try_borrow().ok().and_then(|d| d.as_ref().map(|d| d.hwnd)))
+    else {
+        return;
+    };
+    // SAFETY: valid window handle.
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
