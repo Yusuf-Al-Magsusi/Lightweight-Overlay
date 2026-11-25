@@ -56,6 +56,14 @@ Know before relying on it:
 - Checked exactly against a test program at 30, 100 and 144 fps. With real games it is **not yet verified**; compare with your game's own counter.
 - **Anti-cheat: unknown.** The overlay doesn't touch or open the game, but nothing we found says how anti-cheat systems treat reading these events. Use at your own risk, especially in competitive games.
 
+## CPU temperature and power: what we found (not built yet)
+
+Investigated for a later milestone; the full write-up is `docs/sensor-investigation.md`.
+
+- **CPU power:** on the one PC checked (Windows 11, AMD Ryzen), Windows itself reports it with no admin rights and nothing installed by us. Whether other PCs provide it is not known.
+- **CPU temperature:** no driver-free way was found. Monitoring tools use a **kernel driver**; LibreHardwareMonitor currently uses **PawnIO**.
+- **Anti-cheat:** FACEIT was reported (2025) to block the PawnIO driver; its author reported this fixed in 2026, which we could not confirm with FACEIT. We found **no information** about Easy Anti-Cheat, BattlEye or Vanguard, which is not the same as being safe. Any kernel driver on a gaming PC is a risk you take yourself.
+- Only the **default install is driver-free**, and it stays that way.
 ## Design goals
 
 - Light: target under 30 MB RAM and under 1% CPU idle with three widgets.
