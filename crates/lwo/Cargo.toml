@@ -28,6 +28,8 @@ features = [
   "Foundation",
   "Media",
   "Media_Control",
+  "Win32_System_Diagnostics_Etw",
+  "Win32_System_Time",
   "Win32_System_LibraryLoader",
   "Win32_System_Performance",
   "Win32_System_SystemInformation",
