@@ -20,6 +20,8 @@ pub enum Source {
     Memory,
     /// NVIDIA GPU load, temperature, power and VRAM (through NVML, if installed).
     Gpu,
+    /// Frame rate of the foreground program. Needs a privilege (see docs/fps-investigation.md).
+    Fps,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -42,6 +44,8 @@ pub struct GpuInfo {
 pub struct SourceInfo {
     /// `None` when no GPU source works here; the GPU widget is then dropped.
     pub gpu: Option<GpuInfo>,
+    /// Whether this account may read frame rates.
+    pub fps: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,6 +68,8 @@ pub struct Stats {
     pub cpu_load_percent: Option<f32>,
     pub ram: Option<RamStats>,
     pub gpu: Option<GpuStats>,
+    /// Frames per second of the foreground program, if it is drawing.
+    pub fps: Option<f32>,
 }
 
 /// What the system media session reported at one moment.

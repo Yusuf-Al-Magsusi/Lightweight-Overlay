@@ -7,7 +7,9 @@
 //! own refresh interval is due and redrawn only when it reports a change.
 //! Between events the thread blocks in `GetMessageW`.
 
+mod backdrop;
 mod canvas;
+mod frames;
 mod gpu;
 mod media;
 mod monitors;
@@ -36,6 +38,7 @@ use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+use self::backdrop::{Backdrop, WM_BACKDROP_CLICKED};
 use self::canvas::Gfx;
 use self::media::WM_MEDIA_CHANGED;
 use self::panel::Panel;
@@ -82,6 +85,8 @@ struct State {
     stats: Stats,
     visible: bool,
     editing: bool,
+    /// Present only in edit mode; clicking it ends edit mode.
+    backdrop: Option<Backdrop>,
     /// Edit mode was started while the overlay was hidden: hide it again afterwards.
     hide_after_edit: bool,
     toggle_label: String,
@@ -225,6 +230,9 @@ impl State {
     fn tick(&mut self) {
         if self.visible {
             self.stats = self.sources.poll();
+            if let Some(warning) = self.sources.take_loss_warning() {
+                tray::warn(self.control, &warning);
+            }
             self.update_panels(Pass::Due);
             self.schedule();
         }
@@ -254,7 +262,14 @@ impl State {
         for p in &self.panels {
             p.set_click_through(false);
         }
+        // Without the backdrop, edit mode still works with the hotkey or tray.
+        self.backdrop = Backdrop::show(self.hinst, self.control).ok();
         self.update_panels(Pass::Force);
+        // The widgets, and an open settings window, go back above the backdrop.
+        for p in self.panels.iter().filter(|p| p.is_shown()) {
+            p.raise();
+        }
+        settings::raise();
     }
 
     /// Stop editing, make the windows click-through again and save where they are.
@@ -264,6 +279,7 @@ impl State {
         }
         self.editing = false;
         EDITING.store(false, Ordering::Relaxed);
+        self.backdrop = None;
         for p in &self.panels {
             p.set_click_through(true);
         }
@@ -315,8 +331,14 @@ impl State {
         // Drop widgets whose source can't run here (quietly: no error, no empty
         // panel) and tell the rest what exists.
         let mut widgets = crate::widgets::build(&self.config);
-        let gpu_ok = self.info.gpu.is_some();
-        widgets.retain(|w| w.sources().iter().all(|&s| s != Source::Gpu || gpu_ok));
+        let (gpu_ok, fps_ok) = (self.info.gpu.is_some(), self.info.fps);
+        widgets.retain(|w| {
+            w.sources().iter().all(|&s| match s {
+                Source::Gpu => gpu_ok,
+                Source::Fps => fps_ok,
+                _ => true,
+            })
+        });
         for w in &mut widgets {
             w.configure(&self.info);
         }
@@ -516,6 +538,14 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
             }
             LRESULT(0)
         }
+        WM_BACKDROP_CLICKED => {
+            with_state(|s| {
+                if s.editing {
+                    s.toggle_edit();
+                }
+            });
+            LRESULT(0)
+        }
         WM_MEDIA_CHANGED => {
             with_state(|s| s.on_media_changed());
             LRESULT(0)
@@ -557,6 +587,13 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                     }
                 }
                 _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_ENDSESSION => {
+            // Signing out or shutting down: release everything, including the tracing session.
+            if wp.0 != 0 {
+                with_state(|s| s.hide());
             }
             LRESULT(0)
         }
@@ -612,6 +649,9 @@ fn run_inner(app: App) -> Result<()> {
             return Ok(());
         }
     }
+    // A killed run can leave its tracing session behind. We are the only instance,
+    // so it is safe to stop it now, whether or not FPS is switched on.
+    frames::cleanup_leftover();
 
     // SAFETY: window class registration and creation on this thread.
     let (control, hinst, overlay_class) = unsafe {
@@ -678,6 +718,7 @@ fn run_inner(app: App) -> Result<()> {
         stats: Stats::default(),
         visible: false,
         editing: false,
+        backdrop: None,
         hide_after_edit: false,
         toggle_label: String::new(),
         edit_label: String::new(),
@@ -706,5 +747,8 @@ fn run_inner(app: App) -> Result<()> {
             DispatchMessageW(&msg);
         }
     }
+    // Stop every source before exiting. Statics are not reliably dropped, and the
+    // tracing session would outlive us.
+    with_state(|s| s.hide());
     Ok(())
 }

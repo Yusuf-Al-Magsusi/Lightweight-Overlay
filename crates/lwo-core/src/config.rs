@@ -140,6 +140,24 @@ impl Default for NowPlayingConfig {
     }
 }
 
+/// The FPS widget. Off by default: it needs a Windows privilege, and how
+/// anti-cheat systems treat reading frame events is not known.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FpsConfig {
+    pub enabled: bool,
+    pub refresh_seconds: u32,
+}
+
+impl Default for FpsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            refresh_seconds: DEFAULT_REFRESH_SECONDS,
+        }
+    }
+}
+
 /// Settings shared by the stat widgets (CPU, memory, GPU).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -166,6 +184,7 @@ pub struct WidgetsConfig {
     pub ram: ToggleConfig,
     /// NVIDIA GPU. Quietly hidden when no NVIDIA driver (NVML) is installed.
     pub gpu: ToggleConfig,
+    pub fps: FpsConfig,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -182,7 +201,7 @@ pub struct Config {
 }
 
 /// Widget ids in their default stacking order.
-pub const WIDGET_IDS: [&str; 5] = ["clock", "now_playing", "cpu", "ram", "gpu"];
+pub const WIDGET_IDS: [&str; 6] = ["clock", "now_playing", "cpu", "ram", "gpu", "fps"];
 
 /// Result of loading: the config to use, plus a message for the user if the
 /// file could not be used.
@@ -221,6 +240,7 @@ impl Config {
             &mut w.cpu.refresh_seconds,
             &mut w.ram.refresh_seconds,
             &mut w.gpu.refresh_seconds,
+            &mut w.fps.refresh_seconds,
         ] {
             *secs = (*secs).clamp(1, MAX_REFRESH_SECONDS);
         }
@@ -235,6 +255,7 @@ impl Config {
             "cpu" => w.cpu.enabled,
             "ram" => w.ram.enabled,
             "gpu" => w.gpu.enabled,
+            "fps" => w.fps.enabled,
             _ => false,
         }
     }
@@ -248,6 +269,7 @@ impl Config {
             "cpu" => w.cpu.refresh_seconds,
             "ram" => w.ram.refresh_seconds,
             "gpu" => w.gpu.refresh_seconds,
+            "fps" => w.fps.refresh_seconds,
             _ => DEFAULT_REFRESH_SECONDS,
         };
         Duration::from_secs(u64::from(secs.clamp(1, MAX_REFRESH_SECONDS)))
@@ -572,9 +594,10 @@ mod tests {
     #[test]
     fn enabled_and_refresh_lookups_cover_every_widget_id() {
         let mut c = Config::default();
-        for id in WIDGET_IDS {
+        for id in WIDGET_IDS.into_iter().filter(|&id| id != "fps") {
             assert!(c.enabled(id), "{id} is on by default");
         }
+        assert!(!c.enabled("fps"), "FPS is opt-in");
         assert!(!c.enabled("nonsense"));
         c.widgets.gpu.enabled = false;
         assert!(!c.enabled("gpu"));

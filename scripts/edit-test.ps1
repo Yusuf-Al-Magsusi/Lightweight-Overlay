@@ -19,6 +19,8 @@ public static class E {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
   [DllImport("user32.dll")] public static extern void keybd_event(byte v, byte s, uint f, UIntPtr e);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string c, string t);
@@ -73,6 +75,28 @@ try {
     Check "layout saved to config.toml" ($text -match "\[layout\.") "$(([regex]::Matches($text, '\[layout\.')).Count) entries"
     $moved2 = $after | Where-Object { $_.H -eq $target.H }
     Check "window stayed where it was dropped" ($moved2.L -eq $moved.L -and $moved2.T -eq $moved.T)
+
+    # Clicking outside the widgets must end edit mode (and save); clicking a widget must not.
+    function Click($x, $y) { [void][E]::SetCursorPos($x, $y); Start-Sleep -Milliseconds 250; [E]::mouse_event(0x0002,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 80; [E]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 900 }
+    function Backdrop-Window { [E]::FindWindow("lightweight-overlay-backdrop", [NullString]::Value) }
+    function Editable($procId) { @(Rects $procId | Where-Object { -not ($_.Ex -band 0x20) }).Count }
+    Check "no backdrop outside edit mode" ((Backdrop-Window) -eq [IntPtr]::Zero)
+    Hotkey 0x45
+    Check "edit mode shows the dimmed backdrop" ((Backdrop-Window) -ne [IntPtr]::Zero)
+    $w = @(Rects $p.Id) | Sort-Object T | Select-Object -Last 1
+    Click ($w.L + [int]($w.W / 2)) ($w.T + [int]($w.Ht / 2))
+    Check "clicking a widget keeps edit mode on" (((Editable $p.Id) -gt 0) -and ((Backdrop-Window) -ne [IntPtr]::Zero))
+    # An empty spot: well to the right of every widget. Confirm the backdrop is what is there.
+    $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $ex = [int]($screen.Width * 0.75); $ey = [int]($screen.Height * 0.5)
+    $pt = New-Object E+POINT; $pt.X = $ex; $pt.Y = $ey
+    $under = [E]::WindowFromPoint($pt)
+    Check "the empty spot belongs to the backdrop" ($under -eq (Backdrop-Window))
+    Remove-Item $cfg -ErrorAction SilentlyContinue
+    if ($under -eq (Backdrop-Window)) { Click $ex $ey }   # only ever click our own window
+    Check "clicking outside ends edit mode: click-through again, backdrop gone" (((Editable $p.Id) -eq 0) -and ((Backdrop-Window) -eq [IntPtr]::Zero))
+    Check "...and saves the layout" ((Test-Path $cfg) -and ((Get-Content $cfg -Raw) -match "\[layout\."))
+    $after = @(Rects $p.Id)
 
     # Quit, start again: positions must be restored from the file.
     [void][E]::PostMessage([E]::FindWindow("lightweight-overlay-control", [NullString]::Value), 0x0111, [IntPtr]2, [IntPtr]::Zero)

@@ -24,6 +24,15 @@ Frame times and in-game behaviour can't be measured automatically, so this is ru
 ## Report back
 For each game: baseline FPS / 1% low, FPS / 1% low with overlay, clock visible (yes/no), clicks pass through (yes/no), hotkey works (yes/no), anything odd.
 
+## FPS widget (Milestone 5)
+Needs "Performance Log Users". Turn FPS on in Settings. **Start with Minecraft single player**; don't try it with games that use anti-cheat unless you accept that its behaviour there is unknown.
+1. Put the game in borderless windowed, in front, and set a frame cap you can check (for example 60, then 120).
+2. The FPS panel should settle within about 3 seconds to a number close to the game's own counter (Minecraft: F3). Note both, a few times, at each cap.
+3. Uncapped: does it still follow the game's counter? Does it stay steady?
+4. Alt+Tab to the desktop: it should show `--` or the new front program's rate; back in the game it should recover.
+5. Watch for stutter in the game, and for a tray warning about dropped frame events.
+6. Report: game and graphics API, the cap, the game's counter and our number, and anything odd.
+
 ## Settings, edit mode and tray (Milestone 4)
 The dialog and edit mode are covered by `scripts/settings-test.ps1` and `scripts/edit-test.ps1`. These are the parts only a person can check:
 
@@ -41,6 +50,8 @@ The dialog and edit mode are covered by `scripts/settings-test.ps1` and `scripts
 - Set a very small refresh (1) and a large one (30) for different widgets; the slow ones update less often.
 - Change the show/hide hotkey, Apply: the new one works, the old one does not.
 - Try a hotkey another program uses: you get a warning, the overlay keeps working.
+
+**Click to finish editing:** with edit mode on, the screen dims. Dragging and clicking widgets keeps it on; clicking anywhere else (desktop, another window, the taskbar) ends it and saves, and that click does not also act on what was clicked. With the settings window open, clicking inside it should not end edit mode.
 
 **Edit mode over a game** (borderless windowed):
 - Ctrl+Alt+E while the game is running: the widgets get outlines and can be dragged; the game keeps running.

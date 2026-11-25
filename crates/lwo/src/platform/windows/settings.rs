@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
-use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::monitors;
@@ -48,6 +48,8 @@ struct Controls {
     ram_refresh: HWND,
     gpu_on: HWND,
     gpu_refresh: HWND,
+    fps_on: HWND,
+    fps_refresh: HWND,
     theme: HWND,
     units: HWND,
     scale: HWND,
@@ -138,6 +140,8 @@ fn read_form(c: &Controls) -> SettingsForm {
         ram_refresh: get_text(c.ram_refresh),
         gpu_enabled: get_check(c.gpu_on),
         gpu_refresh: get_text(c.gpu_refresh),
+        fps_enabled: get_check(c.fps_on),
+        fps_refresh: get_text(c.fps_refresh),
         theme: Theme::ALL[get_choice(c.theme).min(Theme::ALL.len() - 1)],
         temperature: TemperatureUnit::ALL[get_choice(c.units).min(TemperatureUnit::ALL.len() - 1)],
         scale_percent: get_text(c.scale),
@@ -166,6 +170,8 @@ fn write_form(c: &Controls, f: &SettingsForm) {
     set_text(c.ram_refresh, &f.ram_refresh);
     set_check(c.gpu_on, f.gpu_enabled);
     set_text(c.gpu_refresh, &f.gpu_refresh);
+    set_check(c.fps_on, f.fps_enabled);
+    set_text(c.fps_refresh, &f.fps_refresh);
     set_choice(
         c.theme,
         Theme::ALL.iter().position(|&t| t == f.theme).unwrap_or(0),
@@ -343,7 +349,14 @@ fn system_font() -> HFONT {
     }
 }
 
-fn build(hwnd: HWND, hinst: HINSTANCE, scale: f32, font: HFONT) -> Controls {
+/// Shown under the FPS row, depending on whether this account may read frame events.
+const FPS_NOTE_AVAILABLE: &str = "FPS shows the program in front, read from Windows' frame events. Off by default: how anti-cheat systems treat this is not known.";
+const FPS_NOTE_UNAVAILABLE: &str = "FPS is unavailable: your account is not in the 'Performance Log Users' group (see the README). Joining lets any program you run trace system activity.";
+
+/// Everything below the Widgets box is moved down by this much to fit the FPS row and note.
+const DOWN: i32 = 62;
+
+fn build(hwnd: HWND, hinst: HINSTANCE, scale: f32, font: HFONT, fps_available: bool) -> Controls {
     let b = Builder {
         parent: hwnd,
         hinst,
@@ -352,7 +365,7 @@ fn build(hwnd: HWND, hinst: HINSTANCE, scale: f32, font: HFONT) -> Controls {
     };
 
     // --- Widgets
-    b.group("Widgets", 10, 6, 460, 196);
+    b.group("Widgets", 10, 6, 460, 196 + DOWN);
     b.label("Refresh (s)", 150, 24, 70);
     b.label("Options", 232, 24, 60);
     let row = |i: i32| 46 + i * 28;
@@ -370,47 +383,69 @@ fn build(hwnd: HWND, hinst: HINSTANCE, scale: f32, font: HFONT) -> Controls {
     let ram_refresh = b.edit(160, row(3), 44);
     let gpu_on = b.check("GPU", 24, row(4), 120);
     let gpu_refresh = b.edit(160, row(4), 44);
+    let fps_on = b.check("FPS", 24, row(5), 120);
+    let fps_refresh = b.edit(160, row(5), 44);
+    b.make(
+        w!("STATIC"),
+        if fps_available {
+            FPS_NOTE_AVAILABLE
+        } else {
+            FPS_NOTE_UNAVAILABLE
+        },
+        WINDOW_STYLE(0),
+        WINDOW_EX_STYLE(0),
+        (24, row(6) + 2, 436, 34),
+        0,
+    );
+    if !fps_available {
+        // The saved value is kept (reading a disabled box still works), it just can't be changed.
+        // SAFETY: disabling controls we created.
+        unsafe {
+            let _ = EnableWindow(fps_on, false);
+            let _ = EnableWindow(fps_refresh, false);
+        }
+    }
 
     // --- Appearance
-    b.group("Appearance", 10, 208, 460, 170);
-    b.label("Theme", 24, 230, 70);
+    b.group("Appearance", 10, 208 + DOWN, 460, 170);
+    b.label("Theme", 24, 230 + DOWN, 70);
     let theme_items: Vec<&str> = Theme::ALL.iter().map(|t| t.label()).collect();
-    let theme = b.combo(100, 230, 130, &theme_items);
-    b.label("Temperature", 250, 230, 80);
+    let theme = b.combo(100, 230 + DOWN, 130, &theme_items);
+    b.label("Temperature", 250, 230 + DOWN, 80);
     let unit_items: Vec<&str> = TemperatureUnit::ALL.iter().map(|u| u.label()).collect();
-    let units = b.combo(334, 230, 126, &unit_items);
-    b.label("Scale (%)", 24, 260, 70);
-    let scale_edit = b.edit(100, 260, 60);
-    b.label("Opacity (%)", 250, 260, 80);
-    let opacity = b.edit(334, 260, 60);
-    b.label("Font", 24, 290, 70);
-    let font_edit = b.edit(100, 290, 200);
+    let units = b.combo(334, 230 + DOWN, 126, &unit_items);
+    b.label("Scale (%)", 24, 260 + DOWN, 70);
+    let scale_edit = b.edit(100, 260 + DOWN, 60);
+    b.label("Opacity (%)", 250, 260 + DOWN, 80);
+    let opacity = b.edit(334, 260 + DOWN, 60);
+    b.label("Font", 24, 290 + DOWN, 70);
+    let font_edit = b.edit(100, 290 + DOWN, 200);
     b.label(
         "Colours, as hex like #FFFFFF or #00000080. Leave blank to use the theme.",
         24,
-        320,
+        320 + DOWN,
         430,
     );
-    b.label("Text", 24, 344, 34);
-    let text_color = b.edit(60, 344, 80);
-    b.label("Background", 150, 344, 74);
-    let background_color = b.edit(228, 344, 80);
-    b.label("Accent", 318, 344, 44);
-    let accent_color = b.edit(366, 344, 80);
+    b.label("Text", 24, 344 + DOWN, 34);
+    let text_color = b.edit(60, 344 + DOWN, 80);
+    b.label("Background", 150, 344 + DOWN, 74);
+    let background_color = b.edit(228, 344 + DOWN, 80);
+    b.label("Accent", 318, 344 + DOWN, 44);
+    let accent_color = b.edit(366, 344 + DOWN, 80);
 
     // --- Hotkeys
-    b.group("Hotkeys", 10, 384, 460, 62);
-    b.label("Show / hide", 24, 408, 76);
-    let hotkey_toggle = b.edit(104, 408, 130);
-    b.label("Edit layout", 250, 408, 70);
-    let hotkey_edit = b.edit(324, 408, 130);
+    b.group("Hotkeys", 10, 384 + DOWN, 460, 62);
+    b.label("Show / hide", 24, 408 + DOWN, 76);
+    let hotkey_toggle = b.edit(104, 408 + DOWN, 130);
+    b.label("Edit layout", 250, 408 + DOWN, 70);
+    let hotkey_edit = b.edit(324, 408 + DOWN, 130);
 
     // --- Buttons
-    b.button("Edit layout", 10, 458, 96, ID_EDIT_LAYOUT, false);
-    b.button("Reset layout", 112, 458, 96, ID_RESET_LAYOUT, false);
-    b.button("OK", 236, 458, 70, ID_OK, true);
-    b.button("Cancel", 312, 458, 70, ID_CANCEL, false);
-    b.button("Apply", 388, 458, 82, ID_APPLY, false);
+    b.button("Edit layout", 10, 458 + DOWN, 96, ID_EDIT_LAYOUT, false);
+    b.button("Reset layout", 112, 458 + DOWN, 96, ID_RESET_LAYOUT, false);
+    b.button("OK", 236, 458 + DOWN, 70, ID_OK, true);
+    b.button("Cancel", 312, 458 + DOWN, 70, ID_CANCEL, false);
+    b.button("Apply", 388, 458 + DOWN, 82, ID_APPLY, false);
 
     Controls {
         clock_on,
@@ -427,6 +462,8 @@ fn build(hwnd: HWND, hinst: HINSTANCE, scale: f32, font: HFONT) -> Controls {
         ram_refresh,
         gpu_on,
         gpu_refresh,
+        fps_on,
+        fps_refresh,
         theme,
         units,
         scale: scale_edit,
@@ -581,7 +618,8 @@ pub fn open(_control: HWND) {
         }
         return;
     }
-    let Some(config) = super::with_state(|s| s.config.clone()) else {
+    let Some((config, fps_available)) = super::with_state(|s| (s.config.clone(), s.info.fps))
+    else {
         return;
     };
 
@@ -608,7 +646,7 @@ pub fn open(_control: HWND) {
             left: 0,
             top: 0,
             right: (480.0 * scale).round() as i32,
-            bottom: (496.0 * scale).round() as i32,
+            bottom: ((496 + DOWN) as f32 * scale).round() as i32,
         };
         let _ = AdjustWindowRectEx(&mut rc, style, false, ex);
         let (win_w, win_h) = (rc.right - rc.left, rc.bottom - rc.top);
@@ -634,7 +672,7 @@ pub fn open(_control: HWND) {
         };
 
         let font = system_font();
-        let controls = build(hwnd, hinst, scale, font);
+        let controls = build(hwnd, hinst, scale, font, fps_available);
         write_form(&controls, &SettingsForm::from_config(&config));
         let first = controls.clock_on;
         DIALOG.with(|d| {
@@ -657,4 +695,24 @@ pub fn is_dialog_message(msg: &MSG) -> bool {
     };
     // SAFETY: valid dialog window and message from the message loop.
     unsafe { IsDialogMessageW(hwnd, msg).as_bool() }
+}
+
+/// Keep an open settings window above other topmost windows (the edit-mode backdrop).
+pub fn raise() {
+    let Some(hwnd) = DIALOG.with(|d| d.try_borrow().ok().and_then(|d| d.as_ref().map(|d| d.hwnd)))
+    else {
+        return;
+    };
+    // SAFETY: valid window handle.
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
 }

@@ -25,6 +25,8 @@ pub struct SettingsForm {
     pub ram_refresh: String,
     pub gpu_enabled: bool,
     pub gpu_refresh: String,
+    pub fps_enabled: bool,
+    pub fps_refresh: String,
 
     pub theme: Theme,
     pub temperature: TemperatureUnit,
@@ -77,6 +79,8 @@ impl SettingsForm {
             ram_refresh: w.ram.refresh_seconds.to_string(),
             gpu_enabled: w.gpu.enabled,
             gpu_refresh: w.gpu.refresh_seconds.to_string(),
+            fps_enabled: w.fps.enabled,
+            fps_refresh: w.fps.refresh_seconds.to_string(),
             theme: c.appearance.theme,
             temperature: c.units.temperature,
             scale_percent: format!("{}", (c.overlay.scale * 100.0).round() as i32),
@@ -113,13 +117,22 @@ impl SettingsForm {
         let cpu = whole_number("The CPU refresh", &self.cpu_refresh, 1, max, &mut errors);
         let ram = whole_number("The memory refresh", &self.ram_refresh, 1, max, &mut errors);
         let gpu = whole_number("The GPU refresh", &self.gpu_refresh, 1, max, &mut errors);
+        let fps = whole_number("The FPS refresh", &self.fps_refresh, 1, max, &mut errors);
         let scale = whole_number("Scale", &self.scale_percent, 50, 400, &mut errors);
         let opacity = whole_number("Opacity", &self.opacity_percent, 10, 100, &mut errors);
         if self.font.trim().is_empty() {
             errors.push("The font name can't be empty.".into());
         }
-        let (Some(clock), Some(np), Some(cpu), Some(ram), Some(gpu), Some(scale), Some(opacity)) =
-            (clock, np, cpu, ram, gpu, scale, opacity)
+        let (
+            Some(clock),
+            Some(np),
+            Some(cpu),
+            Some(ram),
+            Some(gpu),
+            Some(fps),
+            Some(scale),
+            Some(opacity),
+        ) = (clock, np, cpu, ram, gpu, fps, scale, opacity)
         else {
             return Err(errors);
         };
@@ -142,6 +155,8 @@ impl SettingsForm {
         w.ram.refresh_seconds = ram;
         w.gpu.enabled = self.gpu_enabled;
         w.gpu.refresh_seconds = gpu;
+        w.fps.enabled = self.fps_enabled;
+        w.fps.refresh_seconds = fps;
 
         c.appearance.theme = self.theme;
         c.units.temperature = self.temperature;

@@ -25,6 +25,9 @@ public static class S {
   [DllImport("user32.dll", EntryPoint="SendMessageW")] public static extern IntPtr Send(IntPtr h, uint m, IntPtr w, IntPtr l);
   [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)] public static extern IntPtr SendText(IntPtr h, uint m, IntPtr w, string l);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
   [DllImport("user32.dll")] public static extern void keybd_event(byte v, byte s, uint f, UIntPtr e);
   public class Child { public IntPtr H; public string Cls; public string Text; public int Style; public int L, T; }
   public static List<Child> Children(IntPtr parent) { var r = new List<Child>();
@@ -89,9 +92,9 @@ try {
     Check "Settings opens a dialog" ($dlg -ne [IntPtr]::Zero)
     $parts = Parts $dlg
     if ($env:LWO_DEBUG) { Write-Host "dialog handle: $dlg"; ([S]::Children($dlg) | Select-Object Cls, Text, Style | Format-Table | Out-String) | Write-Host }
-    Check "dialog has the expected controls (13 edits, 9 check boxes, 2 drop-downs)" ($parts.Edits.Count -eq 13 -and $parts.Checks.Count -eq 9 -and $parts.Combos.Count -eq 2) "$($parts.Edits.Count) / $($parts.Checks.Count) / $($parts.Combos.Count)"
+    Check "dialog has the expected controls (14 edits, 10 check boxes, 2 drop-downs)" ($parts.Edits.Count -eq 14 -and $parts.Checks.Count -eq 10 -and $parts.Combos.Count -eq 2) "$($parts.Edits.Count) / $($parts.Checks.Count) / $($parts.Combos.Count)"
     $dr = New-Object S+RECT; [void][S]::GetWindowRect($dlg, [ref]$dr); Snap "1-dialog-defaults" $dr
-    Check "fields start with the saved values" ((Read-Edit $parts.Edits[5]) -eq "100" -and (Read-Edit $parts.Edits[7]) -eq "Segoe UI" -and (Read-Edit $parts.Edits[11]) -eq "Ctrl+Alt+O") "scale '$(Read-Edit $parts.Edits[5])' font '$(Read-Edit $parts.Edits[7])' hotkey '$(Read-Edit $parts.Edits[11])'"
+    Check "fields start with the saved values" ((Read-Edit $parts.Edits[6]) -eq "100" -and (Read-Edit $parts.Edits[8]) -eq "Segoe UI" -and (Read-Edit $parts.Edits[12]) -eq "Ctrl+Alt+O") "scale '$(Read-Edit $parts.Edits[6])' font '$(Read-Edit $parts.Edits[8])' hotkey '$(Read-Edit $parts.Edits[12])'"
 
     # Second dialog request must not open another one
     [void][S]::PostMessage((Control-Window), 0x0111, [IntPtr]4, [IntPtr]::Zero); Start-Sleep -Milliseconds 500
@@ -99,25 +102,25 @@ try {
 
     # --- invalid number: message box, nothing saved
     $cfgBefore = if (Test-Path $cfg) { Get-Content $cfg -Raw } else { "" }
-    Set-Text $parts.Edits[5] "5"
+    Set-Text $parts.Edits[6] "5"
     Click-Async $parts.Buttons["Apply"]
     $msg = Close-MessageBox $p.Id
     Check "an invalid scale is refused with a message" ($msg -match "Scale") $msg
     Check "...and nothing was saved or changed" (((Get-Content $cfg -Raw) -eq $cfgBefore) -and ((Panels $p.Id).Count -eq $before.Count))
-    Set-Text $parts.Edits[5] "100"
+    Set-Text $parts.Edits[6] "100"
 
     # --- invalid hotkey: refused by the config validation
-    Set-Text $parts.Edits[11] "O"
+    Set-Text $parts.Edits[12] "O"
     Click-Async $parts.Buttons["Apply"]
     $msg = Close-MessageBox $p.Id
     Check "a hotkey without a modifier is refused" ($msg -match "hotkey") $msg
-    Set-Text $parts.Edits[11] "Ctrl+Alt+P"
+    Set-Text $parts.Edits[12] "Ctrl+Alt+P"
 
     # --- real change: clock off, light theme, 150 % scale, 2 s CPU refresh, new hotkey
     $cpuBefore = ($before | Sort-Object T)[2]
     Set-Check $parts.Checks[0] $false     # clock off
     Set-Combo $parts.Combos[0] 1          # Light
-    Set-Text $parts.Edits[5] "150"        # scale
+    Set-Text $parts.Edits[6] "150"        # scale
     Set-Text $parts.Edits[2] "2"          # CPU refresh seconds
     Click-Async $parts.Buttons["Apply"]
     $after = Panels $p.Id
@@ -141,20 +144,25 @@ try {
     $TRANSPARENT = 0x20
     $editing = @([S]::TopLevel([uint32]$p.Id, "-overlay", [NullString]::Value) | Where-Object { -not ([S]::GetWindowLong($_, -20) -band $TRANSPARENT) }).Count
     Check "edit mode can be entered while the dialog is open" ($editing -gt 0) "$editing editable windows"
-    $partsNow = Parts (Dialog $p.Id)
+    $dlgNow = Dialog $p.Id
+    $wr = New-Object S+RECT; [void][S]::GetWindowRect($dlgNow, [ref]$wr)
+    $mid = New-Object S+POINT; $mid.X = [int](($wr.L + $wr.R) / 2); $mid.Y = [int](($wr.T + $wr.B) / 2)
+    $top = [S]::GetAncestor([S]::WindowFromPoint($mid), 2)   # GA_ROOT
+    Check "the settings window stays above the edit-mode backdrop" ($top -eq $dlgNow) "window at its centre: $top, dialog: $dlgNow"
+    $partsNow = Parts $dlgNow
     Click-Async $partsNow.Buttons["Apply"]
     $stillEditable = @([S]::TopLevel([uint32]$p.Id, "-overlay", [NullString]::Value) | Where-Object { -not ([S]::GetWindowLong($_, -20) -band $TRANSPARENT) }).Count
     Check "Apply while editing ends edit mode and keeps the layout" ($stillEditable -eq 0 -and ((Get-Content $cfg -Raw) -match "\[layout\.")) "$stillEditable still editable"
     # Dialog shows what is in effect; OK closes it
     $parts = Parts (Dialog $p.Id)
-    Check "dialog still open after Apply and shows the applied values" ((Read-Edit $parts.Edits[5]) -eq "150" -and (Read-Edit $parts.Edits[11]) -eq "Ctrl+Alt+P")
+    Check "dialog still open after Apply and shows the applied values" ((Read-Edit $parts.Edits[6]) -eq "150" -and (Read-Edit $parts.Edits[12]) -eq "Ctrl+Alt+P")
     Click-Async $parts.Buttons["OK"]
     Check "OK closes the dialog" ((Dialog $p.Id) -eq [IntPtr]::Zero)
 
     # Reset layout button path and Cancel path: reopen, press Cancel
     [void][S]::PostMessage((Control-Window), 0x0111, [IntPtr]4, [IntPtr]::Zero); Start-Sleep -Milliseconds 800
     $parts = Parts (Dialog $p.Id)
-    Set-Text $parts.Edits[5] "300"
+    Set-Text $parts.Edits[6] "300"
     Click-Async $parts.Buttons["Cancel"]
     Check "Cancel closes the dialog without applying" (((Dialog $p.Id) -eq [IntPtr]::Zero) -and ((Get-Content $cfg -Raw) -match "scale = 1\.5"))
 
