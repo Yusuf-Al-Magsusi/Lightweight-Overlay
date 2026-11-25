@@ -257,3 +257,40 @@ Not measured: memory while the dialog is open; behaviour on a multi-monitor setu
 - The tray icon is still the stock Windows icon.
 - The GPU widget can be switched on later without a restart because the GPU provider is probed once at startup whether or not the widget is on; if no provider works the GPU widget stays hidden.
 - Automated tests cover the logic and the dialog; the tray menu itself (a popup menu) and behaviour over real games are hand-tested (see `docs/game-test-checklist.md`).
+
+## Measurements: Milestone 5 (all six widgets, FPS on)
+Release build, `scripts/measure-overlay.ps1`, Windows 11, AMD RX 9070 XT, one run each. "144 fps load" ran the `present_rate` test program presenting at 144 fps, as a stand-in for a game (its own CPU use is not counted).
+
+| Metric | FPS on, idle desktop (5 min + 60 s) | FPS on, 144 fps load (90 s + 60 s) | Milestone 4, no FPS | Target |
+|---|---|---|---|---|
+| Private working set (Task Manager "Memory") | 23.5 MB | 23.0 MB | 20.8 MB | under 30 MB |
+| CPU (% of all cores) | 0.018 | 0.018 | 0.018 | under 1 |
+| GPU engine use (avg / max %) | 0.026 / 0.039 | 0.037 / 0.048 | 0.014 / 0.021 | none |
+| Exe size | 0.52 MB | 0.52 MB | 0.50 MB | n/a |
+
+- The load run is shorter than usual: the full 5-minute load run gave 0.011% CPU and a 55.9 MB working set, but its private-working-set counter query failed, so memory was taken from this 90 s warm-up rerun.
+- The FPS widget adds about 2.5 MB. The session's kernel buffers are not part of the process's private memory and were **not measured**.
+- Not measured: a real game, rates far above 144 fps, or long sessions.
+
+## D24: FPS is read directly by the overlay (Option A), behind a swappable seam (Milestone 5)
+- The owner chose Option A from `docs/fps-investigation.md`: the overlay reads frame events itself with ETW and **never asks for elevation** (hard constraint 4). It works only for accounts in "Performance Log Users" (or an elevated run); for everyone else the FPS widget is dropped and the settings window says why. The overlay never adds anyone to the group.
+- The owner asked for a way back if the approach changes. Two things provide it:
+  1. **A restore point:** the git branch `backup/before-fps-widget` marks the last commit before any FPS widget code. It is local only until pushed.
+  2. **A seam:** everything about *how* FPS is obtained lives in `platform/windows/frames/`. The rest of the app sees only `frames::{available, start, cleanup_leftover, foreground_pid}` and the `FrameSource` trait (`fps(pid)`, `events_lost()`). Frame counting is OS-independent (`lwo_core::fps::FrameCounter`).
+- **To switch to an elevated helper (Option B):** add `frames/helper.rs` implementing `FrameSource` by receiving rates over a local named pipe; move `etw.rs` into the helper program (it only needs `FrameCounter`); change `available()` and `start()` to choose it. The widget, config, settings and source manager stay as they are. The helper would need the owner's permission to ask for elevation (constraint 4), a secured pipe, and an updated README warning. It could share one elevated program with the Milestone 6 sensor helper.
+
+## D25: How the ETW source works, and why the reading is a few seconds behind (Milestone 5)
+- A real-time session named `lightweight-overlay-fps-<windows session id>` (sessions are machine-wide; the suffix keeps two signed-in users apart). It enables **only one event per provider**: DXGI id 42 and Direct3D 9 id 1 (present start), and DxgKrnl id 184 (kernel present, for programs that don't produce the runtime events). 64 KB buffers, 4 to 24 of them, flushed every second. A thread blocks in `ProcessTrace`.
+- A DirectX program produces both a runtime and a kernel event for each frame (confirmed on the Minecraft test), so `FrameCounter` uses runtime events when a process has any, otherwise kernel events, and never adds them.
+- **Delivery lag.** Measured on the dev PC, events arrive 1.3 s after the frame typically and up to 2.2 s, in batches one second apart. The first version assumed 1.2 s and read **12 to 18 fps for a true 30 fps** because most of each window hadn't arrived; the accuracy test caught this before it shipped. The rate is now counted over a 1 s window ending **2.5 s ago**, so the number shown describes about 2.5 to 3.5 s ago. That is a real limitation for watching sudden drops. Possible later improvement: ask Windows to flush the buffers (not tried), or an average over a longer window.
+- **Accuracy:** `crates/lwo/examples/present_rate.rs` presents at a chosen rate and reports what it really achieved. The ignored test `accuracy_against_a_known_present_rate` compares. At 30, 100 and 144 fps, all 18 readings were exactly 30.0, 100.0 and 144.0, with no events lost. Rates above 144 and real games with uneven frame pacing have not been measured this way.
+- **Which program:** the process that owns the foreground window (`GetForegroundWindow`, `GetWindowThreadProcessId`). **No handle to it is opened** and nothing is read from it. Verified with the test program; **not verified with a real game** (the earlier probe's foreground mark landed on another window). Programs that draw from a helper process (many browsers and Electron apps) will show "--".
+- **Cleanup.** A session outlives its creator. It is stopped when the overlay is hidden, on Quit (also on sign-out or shutdown), and a leftover from a killed run is stopped at the next start, even if FPS is off. Verified by `scripts/fps-test.ps1`. If the overlay is killed and never started again, the session stays until restart.
+- Lost events: Windows' lost-event counters are checked every 10 polls and, if nonzero, a one-time tray balloon says the reading may be low.
+
+## D26: FPS widget behaviour (Milestone 5)
+- **Off by default** (`[widgets.fps] enabled = false`). It needs a privilege, and how anti-cheat systems treat reading frame events is not known; users opt in. The settings window shows a note either way.
+- It shows whole frames per second, or `--` when the program in front isn't drawing, is the overlay itself, or its frames can't be attributed. No 1% lows yet.
+- The privilege check is a look at our own access token (`CheckTokenMembership` for Performance Log Users or an elevated Administrators group); it starts nothing.
+- Debug builds only honour `LWO_FPS_DENIED` to test the no-permission path (greyed-out setting, explanation, no panel, no session); release builds never read it.
+- No new crates. New `windows` features: ETW, Time, RemoteDesktop (session id); Direct3D 11 and DXGI swap chain only for the dev-only test program.

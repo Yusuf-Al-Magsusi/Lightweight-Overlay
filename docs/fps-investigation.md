@@ -1,6 +1,6 @@
 # Milestone 5 investigation: what an FPS widget needs
 
-Status: **investigation done; waiting for the owner's decision before the widget is built.**
+Status: **the owner chose Option A; the widget is built (see docs/decisions.md D24 to D26).** This page records the investigation as it was; where later measurements differ (especially the delivery delay), the decision log is current.
 
 ## Summary
 - The only practical way to read another program's frame rate **without touching it** is ETW (Event Tracing for Windows), the approach PresentMon uses.
