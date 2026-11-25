@@ -34,6 +34,28 @@ Other findings:
 - The probe's `--names` option opens each presenting process with a limited query right to read its file name. It is off by default, and the real widget **must not open the game's process at all** (hard constraint 2): it only needs the process id from the foreground window and from the events.
 - Your earlier PresentMon error ("ETW events were lost", 554585) is not explained yet. PresentMon enables many more providers than the probe. The probe's two filtered kernel events lost nothing at idle, but that says nothing about load.
 
+## Game test: Java Minecraft (run by the owner)
+Minecraft 1.21.1 (NeoForge, Sodium, OpenGL 4.6) on the RX 9070 XT, vsync with a 120 FPS limit. Command: `etw_probe -- 15 --dxgkrnl --names`.
+
+| Result | Value |
+|---|---|
+| Minecraft (`java.exe`), DXGI id 42 | 116.9 frames/s (15 s average) |
+| Minecraft (`java.exe`), DxgKrnl id 184 | 116.9 frames/s, the same count |
+| Minecraft's F3 screen (a screenshot, one moment) | 109 fps, limit 120 |
+| Events received | 22,476 (about 1,500/s) |
+| Events lost / real-time buffers lost | 0 / 0 |
+| Probe CPU | below the measurement resolution (shown as 0.00 s) |
+
+What it shows:
+- Java Minecraft's frames are visible, and **events were not lost while a game was running**.
+- Although Minecraft uses OpenGL, its frames appeared in the plain DXGI provider on this AMD driver. That may not hold for other drivers or games, so the DxgKrnl fallback stays in the design.
+- The two sources counted identically, which confirms they must not be added together.
+- The rate is **consistent with** F3, but this is not an accuracy proof: F3 is one instant, the probe is a 15 s average, they were not read at the same moment, and the rate was moving under a 120 limit. Accuracy still needs the known-rate test program.
+- The foreground mark landed on `Photos.exe`, not Minecraft. The probe reads the foreground window once, **at the end** of the capture, so most likely another window was in front by then. Picking the game by foreground window is therefore still **unverified**.
+- DXGI sends many other events for each frame (about 1,500 events/s in total here). The widget should filter DXGI to the present event only, as the probe already does for DxgKrnl.
+
+Still untested: Rocket League and Fortnite (anti-cheat), frame rates well above 120, long sessions, other GPU vendors, and an account outside Performance Log Users.
+
 ## Anti-cheat
 **None of the pages read says how anti-cheat systems treat ETW consumers.** What can be said: ETW is a Windows feature where we read an event stream the OS produces; we load nothing into the game, hook nothing and (in the intended design) open no handle to it. That is not a guarantee, and the README must keep saying the overlay is use-at-your-own-risk.
 
@@ -63,7 +85,7 @@ Not options: injecting into the game or hooking its graphics API (forbidden by c
 - Report events lost, so we notice if it happens under load.
 - Test with a small program that presents at a known rate, then compare with Minecraft's F3 screen.
 
-## Test you can run (Minecraft only for now)
+## How the Minecraft test was run (can be repeated)
 Do this in single player, in a borderless window. Don't use `--names` with games that have anti-cheat, and don't run it with Rocket League or Fortnite yet.
 
 ```
