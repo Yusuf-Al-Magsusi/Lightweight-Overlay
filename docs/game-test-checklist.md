@@ -24,6 +24,10 @@ Frame times and in-game behaviour can't be measured automatically, so this is ru
 ## Report back
 For each game: baseline FPS / 1% low, FPS / 1% low with overlay, clock visible (yes/no), clicks pass through (yes/no), hotkey works (yes/no), anything odd.
 
+## CPU power (Milestone 6)
+- The CPU panel shows a watts line under the load bar. Compare it with another monitor you trust, idle and in a game; small differences from timing are normal.
+- Settings, CPU row, untick **Show power**, Apply: the line disappears and the panel gets shorter. Tick it again to bring it back.
+- On a PC that doesn't report power: no line, no error, and the setting is greyed out. If you have another PC, please try it and tell us the CPU, Windows version and what you saw.
 ## FPS widget (Milestone 5)
 Needs "Performance Log Users". Turn FPS on in Settings. **Start with Minecraft single player**; don't try it with games that use anti-cheat unless you accept that its behaviour there is unknown.
 1. Put the game in borderless windowed, in front, and set a frame cap you can check (for example 60, then 120).

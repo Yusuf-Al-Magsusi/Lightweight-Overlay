@@ -1,6 +1,6 @@
 # Milestone 6 investigation: CPU temperature and power
 
-Status: **investigation done; waiting for the owner's decision. Nothing built, installed or changed on the PC.**
+Status: **CPU power is built (decisions D27). CPU temperature is not built and waits for the owner's decision (D28).** The owner added a rule: the app must not rely on software the user already has, unless it downloads what it needs itself. That rules out option C below (reading the user's own LibreHardwareMonitor). This page is the investigation as first written.
 
 ## Summary
 1. **CPU package power can be read without our shipping or installing any driver, on the dev PC.** Windows' "Energy Meter" performance counters give it, with no admin rights. The driver behind them is Microsoft's own processor driver. This contradicts the assumption in hard constraint 3 that CPU wattage needs a kernel driver, at least on this hardware, so the owner has to decide how to treat it.
