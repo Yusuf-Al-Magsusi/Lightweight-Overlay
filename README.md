@@ -59,7 +59,7 @@ Know before relying on it:
 ## CPU power and temperature
 
 - **CPU power (watts):** shown in the CPU panel where Windows reports it. It comes from Windows' own energy meter, so nothing extra is installed or downloaded and no admin rights are needed. Checked on one PC (Windows 11, AMD Ryzen 7 7800X3D); other PCs may not report it, in which case the panel simply doesn't show it. Switch it off with **Show power** in Settings.
-- **CPU temperature: not available.** We found no driver-free way to read it. Reading it would mean installing a **kernel driver** (monitoring tools such as LibreHardwareMonitor use **PawnIO**), which is not built. FACEIT was reported (2025) to block that driver; its author reported this fixed in 2026, which we could not confirm with FACEIT. We found **no information** about Easy Anti-Cheat, BattlEye or Vanguard, which is not the same as being safe. Details: `docs/sensor-investigation.md`.
+- **CPU temperature: not available yet** (postponed; see `docs/deferred.md`). We found no driver-free way to read it. Reading it would mean installing a **kernel driver** (monitoring tools such as LibreHardwareMonitor use **PawnIO**), which is not built. FACEIT was reported (2025) to block that driver; its author reported this fixed in 2026, which we could not confirm with FACEIT. We found **no information** about Easy Anti-Cheat, BattlEye or Vanguard, which is not the same as being safe. Details: `docs/sensor-investigation.md`.
 - Only the **default install is driver-free**: it neither ships nor installs a driver, and it stays that way.
 ## Design goals
 

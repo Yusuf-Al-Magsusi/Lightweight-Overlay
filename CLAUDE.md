@@ -23,6 +23,10 @@ Free, open-source, lightweight game overlay for Windows, written in Rust. The pr
 - Commits are authored by the repository owner only. No `Co-Authored-By` or tool-attribution trailers.
 - Test hardware: AMD GPU (so no NVML testing on the dev machine). Games available for manual tests: Minecraft, Rocket League, Fortnite.
 
+## Deferred work
+
+Postponed, not cancelled; read `docs/deferred.md` when planning a milestone. Includes **CPU temperature** (skipped in Milestone 6: needs a kernel driver and a license exception the owner has not given).
+
 ## Layout
 
 - `crates/` product code (Cargo workspace).
