@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use crate::units::TemperatureUnit;
 use crate::widget::{
     Canvas, Color, Context, GpuInfo, GpuStats, Source, SourceInfo, Style, TextMeasure, Widget,
 };
@@ -324,13 +325,13 @@ impl GpuWidget {
     }
 
     /// "62 C    180 W", with only the parts this provider can report.
-    fn vendor_line(&self, g: Option<&GpuStats>) -> String {
+    fn vendor_line(&self, g: Option<&GpuStats>, unit: TemperatureUnit) -> String {
         let mut parts = Vec::new();
         if self.info.has_temperature {
-            let t = g
-                .and_then(|g| g.temperature_c)
-                .map_or_else(|| NA.to_string(), |t| t.to_string());
-            parts.push(format!("{t} \u{00B0}C"));
+            parts.push(
+                g.and_then(|g| g.temperature_c)
+                    .map_or_else(|| format!("{NA} {}", unit.symbol()), |t| unit.format(t)),
+            );
         }
         if self.info.has_power {
             let w = g
@@ -346,7 +347,7 @@ impl GpuWidget {
         let g = ctx.stats.gpu.as_ref();
         let mut details = Vec::new();
         if vendor_row {
-            details.push(self.vendor_line(g));
+            details.push(self.vendor_line(g, ctx.temperature_unit));
         }
         match g {
             Some(g) => {
@@ -559,6 +560,7 @@ mod tests {
             text: Color::new(1.0, 1.0, 1.0, 1.0),
             background: Color::new(0.0, 0.0, 0.0, 0.5),
             accent: Color::new(0.0, 1.0, 0.0, 1.0),
+            temperature_unit: TemperatureUnit::Celsius,
         }
     }
 
@@ -619,6 +621,32 @@ mod tests {
             ..Stats::default()
         }));
         assert_eq!(w.view.details[0], "55 \u{00B0}C");
+    }
+
+    #[test]
+    fn gpu_temperature_follows_the_selected_unit() {
+        let mut w = GpuWidget::new();
+        let mut g = sample_gpu();
+        g.temperature_c = Some(62);
+        g.power_watts = Some(180.0);
+        let mut c = ctx(Stats {
+            gpu: Some(g),
+            ..Stats::default()
+        });
+        w.update(&c);
+        assert_eq!(w.view.details[0], "62 \u{00B0}C    180 W");
+        c.temperature_unit = TemperatureUnit::Fahrenheit;
+        assert!(w.update(&c), "changing the unit must redraw");
+        assert_eq!(w.view.details[0], "144 \u{00B0}F    180 W");
+    }
+
+    #[test]
+    fn missing_temperature_keeps_the_selected_unit_symbol() {
+        let mut w = GpuWidget::new();
+        let mut c = ctx(Stats::default());
+        c.temperature_unit = TemperatureUnit::Fahrenheit;
+        w.update(&c);
+        assert_eq!(w.view.details[0], "-- \u{00B0}F    -- W");
     }
 
     #[test]

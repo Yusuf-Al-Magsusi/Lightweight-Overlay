@@ -6,15 +6,12 @@
 use std::path::PathBuf;
 
 use lwo_core::config::Config;
-use lwo_core::widget::Widget;
 
 /// Everything the platform needs to run the overlay.
 pub struct App {
     pub config: Config,
-    /// Where the config came from (and will be saved to), if known.
-    #[allow(dead_code)] // used by the settings UI in a later milestone
+    /// Where the config came from and where changes are saved, if known.
     pub config_path: Option<PathBuf>,
-    pub widgets: Vec<Box<dyn Widget>>,
     /// Problems to tell the user about once at startup.
     pub warnings: Vec<String>,
 }

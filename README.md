@@ -4,7 +4,7 @@
 
 A free, open-source, lightweight game overlay for Windows. It draws a transparent, click-through, always-on-top window with small widgets (now playing, clock, FPS, CPU/GPU stats) over games and full-screen apps. Portable single `.exe`, no installer, no account.
 
-**Status: pre-alpha (Milestone 3). Clock, Now Playing, CPU, memory and NVIDIA GPU widgets exist so far.**
+**Status: pre-alpha (Milestone 4). Clock, Now Playing, CPU, memory and GPU widgets, with a settings window and a drag-to-position edit mode.**
 
 Widgets:
 - **Clock**: local time.
@@ -20,11 +20,22 @@ Needs Rust (stable, MSVC toolchain).
 cargo run --release -p lwo
 ```
 
-- A clock appears at the top-left of your primary monitor.
-- **Ctrl+Alt+O** shows and hides it.
-- The tray icon: left-click toggles, right-click opens the menu (Show / hide, Quit).
-- Settings live in `%APPDATA%\lightweight-overlay\config.toml`, created on first run. Edit it and restart to apply changes (a settings UI comes later).
+- The widgets appear stacked at the top-left of your primary monitor, each in its own small window.
+- **Ctrl+Alt+O** shows and hides the overlay.
+- **Ctrl+Alt+E** turns edit mode on and off (see below).
+- The tray icon: left-click shows or hides the overlay; right-click opens a menu with **Show / hide**, **Edit layout**, **Settings...** and **Quit**.
 
+### Settings
+
+Open **Settings...** from the tray menu. You can turn each widget on or off, set how often it refreshes (1 to 60 seconds), and choose a theme (Dark, Light or Midnight), temperature unit (Celsius or Fahrenheit), scale, opacity, font, optional colour overrides (hex, like `#FFFFFF`) and both hotkeys. **Apply** takes effect immediately with no restart; if something is invalid, a message says what and nothing changes. **Reset layout** puts the widgets back in the default stack.
+
+### Moving the widgets (edit mode)
+
+Press **Ctrl+Alt+E** (or use the tray menu or the settings window). Every widget gets a green outline; drag each one wherever you like, on any monitor. Press the hotkey again to save. While editing, clicks go to the widgets instead of whatever is underneath, so keep it short. Saved positions follow the nearest screen corner, so they survive a resolution or display-scaling change.
+
+### Config file
+
+Everything is saved in `%APPDATA%\lightweight-overlay\config.toml`, created on first run. You can edit it by hand and restart, or use the settings window. An invalid file is never overwritten: the app uses defaults for that run and tells you.
 ## Design goals
 
 - Light: target under 30 MB RAM and under 1% CPU idle with three widgets.
@@ -47,7 +58,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-`scripts/smoke-test.ps1` runs the built exe against a temporary config and checks the window, hotkey, single-instance and quit behaviour. `scripts/media-test.ps1` tests the Now Playing widget with a fake media player (`cargo build --example fake_media` first). `scripts/stats-test.ps1` tests the CPU, memory and GPU panels, using a fake `nvml.dll` (`crates/fake-nvml`) for the NVIDIA path, and `cargo run --example gpu_load` generates real GPU load for the generic path. Run `cargo build --workspace` before `cargo test` so the fake library exists (the NVML test is skipped locally, and fails when `CI` is set, if it is missing). See `docs/decisions.md` for design decisions and `docs/game-test-checklist.md` for manual game testing.
+`scripts/smoke-test.ps1` runs the built exe against a temporary config and checks the window, hotkey, single-instance and quit behaviour. `scripts/media-test.ps1` tests the Now Playing widget with a fake media player (`cargo build --example fake_media` first). `scripts/stats-test.ps1` tests the CPU, memory and GPU panels, using a fake `nvml.dll` (`crates/fake-nvml`) for the NVIDIA path, and `cargo run --example gpu_load` generates real GPU load for the generic path. Run `cargo build --workspace` before `cargo test` so the fake library exists (the NVML test is skipped locally, and fails when `CI` is set, if it is missing). `scripts/edit-test.ps1` drags a widget with the real mouse in edit mode and checks that the layout is saved and restored, and `scripts/settings-test.ps1` drives the real settings window (20 checks, including bad input). Run the test scripts in separate PowerShell sessions. See `docs/decisions.md` for design decisions and `docs/game-test-checklist.md` for manual game testing.
 
 ## License
 

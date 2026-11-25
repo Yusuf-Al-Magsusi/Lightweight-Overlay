@@ -1,29 +1,34 @@
-//! Windows platform: a click-through layered window plus a hidden control
-//! window that owns the hotkey, timer and tray icon.
+//! Windows platform: one click-through layered window per widget (a "panel"),
+//! plus a hidden control window that owns the hotkeys, timer, tray icon and
+//! the settings dialog.
 //!
-//! Lazy by design: while the overlay is hidden the timer is stopped, and while
-//! it is visible the window is only redrawn when a widget reports a change.
+//! Lazy by design: while the overlay is hidden the timer is stopped and every
+//! source is off, and while it is visible each widget is updated only when its
+//! own refresh interval is due and redrawn only when it reports a change.
 //! Between events the thread blocks in `GetMessageW`.
 
 mod canvas;
 mod gpu;
 mod media;
+mod monitors;
+mod panel;
 mod sensors;
+mod settings;
+mod sources;
 mod tray;
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Instant;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
-use lwo_core::config::Anchor;
+use lwo_core::config::Config;
 use lwo_core::hotkey::{Hotkey, Key};
-use lwo_core::widget::{
-    Color, Context, LocalTime, MediaSnapshot, Source, SourceInfo, Stats, Style, Widget,
-};
+use lwo_core::layout;
+use lwo_core::widget::{Context, LocalTime, Source, SourceInfo, Stats, Style};
 use lwo_core::APP_NAME;
 use windows::core::{w, Result, HSTRING};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::Threading::CreateMutexW;
@@ -31,107 +36,56 @@ use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use self::canvas::{Measurer, Surface};
-use self::gpu::GpuSource;
-use self::media::{MediaSource, WM_MEDIA_CHANGED};
-use self::sensors::{read_memory, CpuSampler};
+use self::canvas::Gfx;
+use self::media::WM_MEDIA_CHANGED;
+use self::panel::Panel;
+use self::sources::{probe_sources, Sources};
 use super::App;
-use lwo_core::widget::TextMeasure;
-use std::sync::Arc;
 
 const TIMER_ID: usize = 1;
-const HOTKEY_ID: i32 = 1;
+const HOTKEY_TOGGLE: i32 = 1;
+const HOTKEY_EDIT: i32 = 2;
 const WIDGET_GAP: f32 = 6.0;
+/// A widget counts as due if its time comes within this much of the tick.
+const DUE_TOLERANCE: Duration = Duration::from_millis(120);
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+/// Read by the overlay window procedure: in edit mode, windows are draggable.
+static EDITING: AtomicBool = AtomicBool::new(false);
 
-/// What this machine's sources can provide, learned once at startup. A GPU
-/// provider is opened, inspected and dropped again (which unloads NVML or
-/// closes the counter query), so probing leaves nothing running.
-fn probe_sources(widgets: &[Box<dyn Widget>]) -> SourceInfo {
-    let needs_gpu = widgets.iter().any(|w| w.sources().contains(&Source::Gpu));
-    SourceInfo {
-        gpu: if needs_gpu {
-            GpuSource::open().map(|g| g.info())
-        } else {
-            None
-        },
-    }
-}
-
-/// The lazy source manager. A source exists only if a widget declared it, and
-/// it runs only while the overlay is visible: `start` on show, `stop` on hide.
-/// While running, polled sources are read once per tick, and only the ones
-/// that exist.
-struct Sources {
-    media: Option<MediaSource>,
-    cpu: Option<CpuSampler>,
-    memory: bool,
-    gpu_wanted: bool,
-    gpu: Option<GpuSource>,
-}
-
-impl Sources {
-    fn for_widgets(widgets: &[Box<dyn Widget>]) -> Self {
-        let wants = |s: Source| widgets.iter().any(|w| w.sources().contains(&s));
-        Self {
-            media: wants(Source::Media).then(MediaSource::new),
-            cpu: wants(Source::Cpu).then(CpuSampler::new),
-            memory: wants(Source::Memory),
-            gpu_wanted: wants(Source::Gpu),
-            gpu: None,
-        }
-    }
-
-    fn start(&mut self, notify: HWND) {
-        if let Some(m) = &mut self.media {
-            m.start(notify);
-        }
-        if let Some(c) = &mut self.cpu {
-            c.reset();
-        }
-        if self.gpu_wanted && self.gpu.is_none() {
-            self.gpu = GpuSource::open();
-        }
-    }
-
-    fn stop(&mut self) {
-        if let Some(m) = &mut self.media {
-            m.stop();
-        }
-        self.gpu = None; // shuts NVML down and unloads it, or closes the counter query
-    }
-
-    /// Read every running polled source once.
-    fn poll(&mut self) -> Stats {
-        Stats {
-            cpu_load_percent: self.cpu.as_mut().and_then(CpuSampler::sample),
-            ram: if self.memory { read_memory() } else { None },
-            gpu: self.gpu.as_mut().and_then(GpuSource::read),
-        }
-    }
-
-    fn media_snapshot(&self) -> Option<Arc<MediaSnapshot>> {
-        self.media.as_ref().and_then(MediaSource::snapshot)
-    }
+/// Which panels `update_panels` should update.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    /// Those whose refresh interval has elapsed.
+    Due,
+    /// Those that show the media session (it just changed).
+    Media,
+    /// All of them, and repaint regardless.
+    Force,
 }
 
 struct State {
     control: HWND,
-    overlay: HWND,
-    surface: Surface,
-    widgets: Vec<Box<dyn Widget>>,
+    hinst: HINSTANCE,
+    overlay_class: HSTRING,
+    gfx: Gfx,
+    config: Config,
+    config_path: Option<PathBuf>,
+    /// What this machine's sources can provide; probed once at startup.
+    info: SourceInfo,
+    dpi_scale: f32,
     style: Style,
-    /// Widget heights, in stacking order.
-    heights: Vec<f32>,
-    gap: f32,
-    pos: POINT,
     opacity: u8,
-    visible: bool,
-    toggle_label: String,
+    panels: Vec<Panel>,
     sources: Sources,
     /// Latest polled readings, refreshed on each timer tick.
     stats: Stats,
+    visible: bool,
+    editing: bool,
+    /// Edit mode was started while the overlay was hidden: hide it again afterwards.
+    hide_after_edit: bool,
+    toggle_label: String,
+    edit_label: String,
 }
 
 thread_local! {
@@ -161,81 +115,64 @@ fn local_time() -> (LocalTime, u16) {
 }
 
 impl State {
-    /// Redraw if anything changed (or `force`). Returns whether it drew.
-    fn draw(&mut self, force: bool) -> Result<bool> {
+    fn context(&self, now: Instant) -> Context {
         let (time, _) = local_time();
-        let ctx = Context {
+        Context {
             time,
-            now: Instant::now(),
+            now,
             media: self.sources.media_snapshot(),
             stats: self.stats.clone(),
-        };
-        let mut changed = force;
-        for w in &mut self.widgets {
-            changed |= w.update(&ctx);
+            temperature_unit: self.config.units.temperature,
         }
-        if !changed {
-            return Ok(false);
-        }
+    }
 
-        let widgets = &self.widgets;
-        let heights = &self.heights;
-        let style = &self.style;
-        let gap = self.gap;
-        self.surface.paint(|frame| {
-            let mut y = 0.0;
-            for (w, h) in widgets.iter().zip(heights) {
-                frame.set_origin(0.0, y);
-                w.render(frame, style);
-                y += h + gap;
+    /// Update the selected panels, repaint the ones that changed, and show or
+    /// hide each window according to its widget (edit mode shows them all).
+    fn update_panels(&mut self, pass: Pass) {
+        let now = Instant::now();
+        let ctx = self.context(now);
+        let (style, opacity, editing) = (&self.style, self.opacity, self.editing);
+        for p in &mut self.panels {
+            let run = match pass {
+                Pass::Force => true,
+                Pass::Media => p.uses_media(),
+                Pass::Due => p.is_due(now, DUE_TOLERANCE),
+            };
+            if !run {
+                continue;
             }
-        })?;
-
-        let size = SIZE {
-            cx: self.surface.width,
-            cy: self.surface.height,
-        };
-        let blend = BLENDFUNCTION {
-            BlendOp: AC_SRC_OVER as u8,
-            BlendFlags: 0,
-            SourceConstantAlpha: self.opacity,
-            AlphaFormat: AC_SRC_ALPHA as u8,
-        };
-        // SAFETY: valid window and DC; all pointers outlive the call.
-        unsafe {
-            let screen = GetDC(None);
-            let r = UpdateLayeredWindow(
-                self.overlay,
-                Some(screen),
-                Some(&self.pos),
-                Some(&size),
-                Some(self.surface.mem_dc),
-                Some(&POINT { x: 0, y: 0 }),
-                COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            );
-            ReleaseDC(None, screen);
-            r?;
+            let changed = p.update(&ctx);
+            let want = editing || p.widget.visible();
+            // Paint before showing so a window never appears blank.
+            if want && (changed || pass == Pass::Force || !p.is_shown()) {
+                let _ = p.paint(style, opacity, editing);
+            }
+            p.set_shown(want);
         }
-        Ok(true)
     }
 
     /// Milliseconds until the next update is due, lined up with the second
-    /// boundary for 1 s widgets so a clock never shows a stale second.
+    /// boundary when a widget updates every second so a clock never shows a
+    /// stale second.
     fn next_delay_ms(&self) -> u32 {
-        let min = self
-            .widgets
+        let now = Instant::now();
+        let soonest = self
+            .panels
             .iter()
-            .map(|w| w.refresh_interval().as_millis() as u32)
+            .map(|p| p.next_due().saturating_duration_since(now))
             .min()
-            .unwrap_or(1000)
-            .max(50);
-        if min == 1000 {
+            .unwrap_or(Duration::from_secs(1));
+        let soonest_ms = soonest.as_millis().min(u128::from(u32::MAX)) as u32;
+        let every_second = self
+            .panels
+            .iter()
+            .any(|p| p.interval() <= Duration::from_secs(1));
+        if every_second {
             let (_, ms) = local_time();
-            (1000 - ms as u32 + 5).clamp(20, 1005)
+            let to_boundary = (1000 - u32::from(ms) + 5).clamp(20, 1005);
+            to_boundary.min(soonest_ms.max(20))
         } else {
-            min
+            soonest_ms.max(50)
         }
     }
 
@@ -247,48 +184,34 @@ impl State {
     }
 
     fn show(&mut self) {
-        if self.widgets.is_empty() {
+        if self.panels.is_empty() {
             return;
         }
         self.sources.start(self.control);
         self.stats = self.sources.poll();
-        let _ = self.draw(true);
-        // SAFETY: valid overlay window. Re-asserting TOPMOST keeps us above
-        // borderless-fullscreen windows that took the top spot meanwhile.
-        unsafe {
-            let _ = ShowWindow(self.overlay, SW_SHOWNOACTIVATE);
-            let _ = SetWindowPos(
-                self.overlay,
-                Some(HWND_TOPMOST),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-        }
         self.visible = true;
+        self.update_panels(Pass::Force);
+        for p in self.panels.iter().filter(|p| p.is_shown()) {
+            p.raise();
+        }
         self.schedule();
     }
 
     fn hide(&mut self) {
-        // SAFETY: valid windows; stopping the timer means a hidden overlay does no work.
+        if self.editing {
+            self.leave_edit_mode();
+        }
+        self.hide_after_edit = false;
+        // SAFETY: valid control window; stopping the timer means a hidden overlay does no work.
         unsafe {
             let _ = KillTimer(Some(self.control), TIMER_ID);
-            let _ = ShowWindow(self.overlay, SW_HIDE);
+        }
+        for p in &mut self.panels {
+            p.set_shown(false);
         }
         self.sources.stop();
         self.stats = Stats::default();
         self.visible = false;
-    }
-
-    /// The media session changed: redraw now and re-plan the timer (play/pause
-    /// changes how often the widget wants updates).
-    fn on_media_changed(&mut self) {
-        if self.visible {
-            let _ = self.draw(false);
-            self.schedule();
-        }
     }
 
     fn toggle(&mut self) {
@@ -302,9 +225,243 @@ impl State {
     fn tick(&mut self) {
         if self.visible {
             self.stats = self.sources.poll();
-            let _ = self.draw(false);
+            self.update_panels(Pass::Due);
             self.schedule();
         }
+    }
+
+    /// The media session changed: update the media widgets now and re-plan the
+    /// timer (play and pause change how often they want updates).
+    fn on_media_changed(&mut self) {
+        if self.visible {
+            self.update_panels(Pass::Media);
+            self.schedule();
+        }
+    }
+
+    // ---------------------------------------------------------- edit mode
+
+    fn enter_edit_mode(&mut self) {
+        if self.editing || self.panels.is_empty() {
+            return;
+        }
+        if !self.visible {
+            self.hide_after_edit = true;
+            self.show();
+        }
+        self.editing = true;
+        EDITING.store(true, Ordering::Relaxed);
+        for p in &self.panels {
+            p.set_click_through(false);
+        }
+        self.update_panels(Pass::Force);
+    }
+
+    /// Stop editing, make the windows click-through again and save where they are.
+    fn leave_edit_mode(&mut self) -> Option<String> {
+        if !self.editing {
+            return None;
+        }
+        self.editing = false;
+        EDITING.store(false, Ordering::Relaxed);
+        for p in &self.panels {
+            p.set_click_through(true);
+        }
+        let saved = self.save_layout();
+        self.update_panels(Pass::Force);
+        saved.err()
+    }
+
+    fn toggle_edit(&mut self) {
+        if self.editing {
+            let problem = self.leave_edit_mode();
+            if self.hide_after_edit {
+                self.hide();
+            }
+            if let Some(msg) = problem {
+                tray::warn(self.control, &msg);
+            }
+        } else {
+            self.enter_edit_mode();
+        }
+    }
+
+    /// Record every panel's current position in the config and save it.
+    fn save_layout(&mut self) -> std::result::Result<(), String> {
+        for p in &self.panels {
+            let (index, monitor) = monitors::of_window(p.hwnd);
+            let placement = layout::placement_from_rect(index, monitor, p.rect(), self.dpi_scale);
+            self.config.layout.insert(p.id.to_string(), placement);
+        }
+        match &self.config_path {
+            Some(path) => self
+                .config
+                .save(path)
+                .map_err(|e| format!("Could not save the layout to {}: {e}", path.display())),
+            None => Ok(()),
+        }
+    }
+
+    // ------------------------------------------------- config and rebuild
+
+    /// Rebuild the widgets, windows, style and sources from `self.config`.
+    /// The overlay must be hidden (and not editing) when this runs.
+    fn rebuild(&mut self) -> Result<()> {
+        self.panels.clear(); // destroys the old windows
+        self.dpi_scale = unsafe { GetDpiForSystem() } as f32 / 96.0;
+        self.style = self.config.style(self.dpi_scale);
+        self.opacity = (self.config.overlay.opacity * 255.0).round() as u8;
+
+        // Drop widgets whose source can't run here (quietly: no error, no empty
+        // panel) and tell the rest what exists.
+        let mut widgets = crate::widgets::build(&self.config);
+        let gpu_ok = self.info.gpu.is_some();
+        widgets.retain(|w| w.sources().iter().all(|&s| s != Source::Gpu || gpu_ok));
+        for w in &mut widgets {
+            w.configure(&self.info);
+        }
+        self.sources = Sources::for_widgets(&widgets);
+
+        let sizes: Vec<(i32, i32)> = widgets
+            .iter()
+            .map(|w| {
+                let (width, height) = w.size(&self.gfx.measurer, &self.style);
+                (width.ceil() as i32, height.ceil() as i32)
+            })
+            .collect();
+        let gap = (WIDGET_GAP * self.style.scale).round() as i32;
+        let (offsets, (group_w, group_h)) = layout::stack(&sizes, gap);
+
+        let monitors = monitors::list();
+        let primary = monitors[0];
+        let o = &self.config.overlay;
+        let origin = layout::anchored(
+            o.anchor,
+            (o.offset_x as f32 * self.dpi_scale).round() as i32,
+            (o.offset_y as f32 * self.dpi_scale).round() as i32,
+            group_w,
+            group_h,
+            primary,
+        );
+
+        let mut panels = Vec::with_capacity(widgets.len());
+        for ((widget, size), offset) in widgets.into_iter().zip(sizes).zip(offsets) {
+            let id = widget.id();
+            let pos = match self.config.layout.get(id) {
+                Some(placement) => {
+                    let monitor = monitors
+                        .get(placement.monitor as usize)
+                        .copied()
+                        .unwrap_or(primary);
+                    layout::position_from_placement(
+                        placement,
+                        monitor,
+                        size.0,
+                        size.1,
+                        self.dpi_scale,
+                    )
+                }
+                None => (origin.0 + offset.0, origin.1 + offset.1),
+            };
+            panels.push(Panel::create(
+                widget,
+                size,
+                pos,
+                self.config.refresh_for(id),
+                &self.gfx,
+                self.hinst,
+                &self.overlay_class,
+            )?);
+        }
+        self.panels = panels;
+        Ok(())
+    }
+
+    /// Register both hotkeys and set the tray labels. Returns anything the user should hear about.
+    fn register_hotkeys(&mut self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let mut register = |id: i32, text: &str, name: &str, label: &str| -> String {
+            // SAFETY: valid window handle owned by this thread; a missing registration is fine.
+            unsafe {
+                let _ = UnregisterHotKey(Some(self.control), id);
+            }
+            match Hotkey::parse(text) {
+                Ok(hk) => match register_hotkey(self.control, id, hk) {
+                    Ok(()) => format!("{label} ({hk})"),
+                    Err(e) => {
+                        warnings.push(format!(
+                            "The {name} hotkey {hk} is unavailable ({e}); another program may be using it. Use the tray icon instead."
+                        ));
+                        label.to_string()
+                    }
+                },
+                Err(e) => {
+                    warnings.push(format!(
+                        "Invalid {name} hotkey: {e}. Use the tray icon instead."
+                    ));
+                    label.to_string()
+                }
+            }
+        };
+        self.toggle_label = register(
+            HOTKEY_TOGGLE,
+            &self.config.hotkeys.toggle.clone(),
+            "show/hide",
+            "Show / hide overlay",
+        );
+        self.edit_label = register(
+            HOTKEY_EDIT,
+            &self.config.hotkeys.edit.clone(),
+            "edit-mode",
+            "Edit layout",
+        );
+        warnings
+    }
+
+    /// Change the settings: validate, save, rebuild and carry on, all without a restart.
+    // Temporary: the settings dialog (next commit) is the only caller.
+    #[allow(dead_code)]
+    /// `edit` receives a copy of the current config, so settings it doesn't
+    /// touch (including saved positions) are kept. On failure nothing changes.
+    fn update_config(
+        &mut self,
+        edit: impl FnOnce(&mut Config),
+    ) -> std::result::Result<Vec<String>, String> {
+        let mut config = self.config.clone();
+        edit(&mut config);
+        config.sanitize();
+        let problems = config.problems();
+        if !problems.is_empty() {
+            return Err(problems.join("\n"));
+        }
+
+        let was_visible = self.visible;
+        if self.editing {
+            self.leave_edit_mode();
+            config.layout = self.config.layout.clone(); // may have just been saved
+        }
+        if was_visible {
+            self.hide();
+        }
+        self.config = config;
+
+        let mut warnings = Vec::new();
+        if let Some(path) = &self.config_path {
+            if let Err(e) = self.config.save(path) {
+                warnings.push(format!(
+                    "Could not save settings to {}: {e}",
+                    path.display()
+                ));
+            }
+        }
+        if let Err(e) = self.rebuild() {
+            return Err(format!("Could not rebuild the overlay: {e}"));
+        }
+        warnings.extend(self.register_hotkeys());
+        if was_visible {
+            self.show();
+        }
+        Ok(warnings)
     }
 }
 
@@ -322,7 +479,7 @@ fn vk_of(key: Key) -> u32 {
     }
 }
 
-fn register_hotkey(hwnd: HWND, hk: Hotkey) -> Result<()> {
+fn register_hotkey(hwnd: HWND, id: i32, hk: Hotkey) -> Result<()> {
     let mut mods = MOD_NOREPEAT;
     if hk.ctrl {
         mods |= MOD_CONTROL;
@@ -337,7 +494,7 @@ fn register_hotkey(hwnd: HWND, hk: Hotkey) -> Result<()> {
         mods |= MOD_WIN;
     }
     // SAFETY: valid window handle owned by this thread.
-    unsafe { RegisterHotKey(Some(hwnd), HOTKEY_ID, mods, vk_of(hk.key)) }
+    unsafe { RegisterHotKey(Some(hwnd), id, mods, vk_of(hk.key)) }
 }
 
 unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -347,8 +504,16 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
             with_state(|s| s.tick());
             LRESULT(0)
         }
-        WM_HOTKEY if wp.0 as i32 == HOTKEY_ID => {
-            with_state(|s| s.toggle());
+        WM_HOTKEY => {
+            match wp.0 as i32 {
+                HOTKEY_TOGGLE => {
+                    with_state(|s| s.toggle());
+                }
+                HOTKEY_EDIT => {
+                    with_state(|s| s.toggle_edit());
+                }
+                _ => {}
+            }
             LRESULT(0)
         }
         WM_MEDIA_CHANGED => {
@@ -361,8 +526,14 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                     with_state(|s| s.toggle());
                 }
                 WM_RBUTTONUP => {
-                    let label = with_state(|s| s.toggle_label.clone()).unwrap_or_default();
-                    tray::show_menu(hwnd, &label);
+                    let text = with_state(|s| tray::MenuText {
+                        toggle: s.toggle_label.clone(),
+                        edit: s.edit_label.clone(),
+                        editing: s.editing,
+                    });
+                    if let Some(text) = text {
+                        tray::show_menu(hwnd, &text);
+                    }
                 }
                 _ => {}
             }
@@ -373,7 +544,13 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                 tray::ID_TOGGLE => {
                     with_state(|s| s.toggle());
                 }
+                tray::ID_EDIT => {
+                    with_state(|s| s.toggle_edit());
+                }
+                tray::ID_SETTINGS => settings::open(hwnd),
                 tray::ID_QUIT => {
+                    // Save any layout being edited before the windows go away.
+                    with_state(|s| s.leave_edit_mode());
                     // SAFETY: destroying our own window.
                     unsafe {
                         let _ = DestroyWindow(hwnd);
@@ -399,29 +576,15 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
     }
 }
 
+/// Window procedure for the widget windows. They are click-through, except in
+/// edit mode, where every pixel answers "title bar" so Windows moves the window
+/// when it is dragged.
 unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    // SAFETY: default handling; the overlay never handles its own messages.
+    if msg == WM_NCHITTEST && EDITING.load(Ordering::Relaxed) {
+        return LRESULT(HTCAPTION as isize);
+    }
+    // SAFETY: default handling for everything else.
     unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
-}
-
-fn anchored_position(anchor: Anchor, off_x: i32, off_y: i32, w: i32, h: i32) -> POINT {
-    // SAFETY: querying the primary monitor.
-    let rc = unsafe {
-        let mon = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
-        let mut info = MONITORINFO {
-            cbSize: size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        let _ = GetMonitorInfoW(mon, &mut info);
-        info.rcMonitor
-    };
-    let (x, y) = match anchor {
-        Anchor::TopLeft => (rc.left + off_x, rc.top + off_y),
-        Anchor::TopRight => (rc.right - w - off_x, rc.top + off_y),
-        Anchor::BottomLeft => (rc.left + off_x, rc.bottom - h - off_y),
-        Anchor::BottomRight => (rc.right - w - off_x, rc.bottom - h - off_y),
-    };
-    POINT { x, y }
 }
 
 pub fn run(app: App) -> std::result::Result<(), String> {
@@ -430,23 +593,11 @@ pub fn run(app: App) -> std::result::Result<(), String> {
 
 fn run_inner(app: App) -> Result<()> {
     let App {
-        config,
-        mut widgets,
+        mut config,
+        config_path,
         mut warnings,
-        ..
     } = app;
-
-    // Learn what the sources can provide, drop widgets whose source can't run
-    // here (quietly: no error, no empty panel), and tell the rest what exists.
-    let info = probe_sources(&widgets);
-    widgets.retain(|w| {
-        w.sources()
-            .iter()
-            .all(|&s| s != Source::Gpu || info.gpu.is_some())
-    });
-    for w in &mut widgets {
-        w.configure(&info);
-    }
+    config.sanitize();
 
     // SAFETY: process-wide setup, done once before any window exists.
     unsafe {
@@ -462,39 +613,8 @@ fn run_inner(app: App) -> Result<()> {
         }
     }
 
-    let dpi_scale = unsafe { GetDpiForSystem() } as f32 / 96.0;
-    let o = &config.overlay;
-    let style = Style {
-        font: o.font.clone(),
-        scale: o.scale * dpi_scale,
-        text: Color::new(1.0, 1.0, 1.0, 1.0),
-        background: Color::new(0.05, 0.05, 0.08, 0.7),
-        accent: Color::new(0.3, 0.8, 0.5, 1.0),
-    };
-
-    // Size the overlay from the widgets' own measurements.
-    let measurer = Measurer::new()?;
-    let sizes: Vec<(f32, f32)> = widgets
-        .iter()
-        .map(|w| w.size(&measurer as &dyn TextMeasure, &style))
-        .collect();
-    let gap = WIDGET_GAP * style.scale;
-    let width = sizes.iter().map(|s| s.0).fold(0.0_f32, f32::max).ceil() as i32;
-    let height = (sizes.iter().map(|s| s.1).sum::<f32>()
-        + gap * sizes.len().saturating_sub(1) as f32)
-        .ceil() as i32;
-    let (win_w, win_h) = (width.max(1), height.max(1));
-
-    let pos = anchored_position(
-        o.anchor,
-        (o.offset_x as f32 * dpi_scale) as i32,
-        (o.offset_y as f32 * dpi_scale) as i32,
-        win_w,
-        win_h,
-    );
-
     // SAFETY: window class registration and creation on this thread.
-    let (control, overlay) = unsafe {
+    let (control, hinst, overlay_class) = unsafe {
         let hinst: HINSTANCE = GetModuleHandleW(None)?.into();
         let overlay_class = HSTRING::from(format!("{APP_NAME}-overlay"));
         let control_class = HSTRING::from(format!("{APP_NAME}-control"));
@@ -514,22 +634,7 @@ fn run_inner(app: App) -> Result<()> {
             RegisterWindowMessageW(w!("TaskbarCreated")),
             Ordering::Relaxed,
         );
-
-        let overlay = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-            &overlay_class,
-            &HSTRING::from(APP_NAME),
-            WS_POPUP,
-            pos.x,
-            pos.y,
-            win_w,
-            win_h,
-            None,
-            None,
-            Some(hinst),
-            None,
-        )?;
-        // Never shown; exists to receive the hotkey, timer and tray messages.
+        // Never shown; exists to receive the hotkey, timer, tray and settings messages.
         let control = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             &control_class,
@@ -544,47 +649,41 @@ fn run_inner(app: App) -> Result<()> {
             Some(hinst),
             None,
         )?;
-        (control, overlay)
-    };
-
-    let toggle = match Hotkey::parse(&config.hotkeys.toggle) {
-        Ok(hk) => match register_hotkey(control, hk) {
-            Ok(()) => Some(hk),
-            Err(e) => {
-                warnings.push(format!(
-                    "Hotkey {hk} is unavailable ({e}); another program may be using it. Use the tray icon instead."
-                ));
-                None
-            }
-        },
-        Err(e) => {
-            warnings.push(format!(
-                "Invalid toggle hotkey: {e}. Use the tray icon instead."
-            ));
-            None
-        }
-    };
-    let toggle_label = match toggle {
-        Some(hk) => format!("Show / hide overlay ({hk})"),
-        None => "Show / hide overlay".to_string(),
+        (control, hinst, overlay_class)
     };
 
     let start_visible = config.overlay.start_visible;
-    let state = State {
-        sources: Sources::for_widgets(&widgets),
-        stats: Stats::default(),
+    let mut state = State {
         control,
-        overlay,
-        surface: Surface::new(win_w, win_h)?,
-        heights: sizes.iter().map(|s| s.1).collect(),
-        widgets,
-        style,
-        gap,
-        pos,
-        opacity: (config.overlay.opacity * 255.0).round() as u8,
+        hinst,
+        overlay_class,
+        gfx: Gfx::new()?,
+        config,
+        config_path,
+        // Probed whether or not the GPU widget is on now, so it can be switched
+        // on later in the settings without a restart.
+        info: probe_sources(),
+        dpi_scale: 1.0,
+        style: Style {
+            font: String::new(),
+            scale: 1.0,
+            text: lwo_core::widget::Color::new(1.0, 1.0, 1.0, 1.0),
+            background: lwo_core::widget::Color::new(0.0, 0.0, 0.0, 0.7),
+            accent: lwo_core::widget::Color::new(0.3, 0.8, 0.5, 1.0),
+            temperature_unit: Default::default(),
+        },
+        opacity: 255,
+        panels: Vec::new(),
+        sources: Sources::for_widgets(&[]),
+        stats: Stats::default(),
         visible: false,
-        toggle_label,
+        editing: false,
+        hide_after_edit: false,
+        toggle_label: String::new(),
+        edit_label: String::new(),
     };
+    state.rebuild()?;
+    warnings.extend(state.register_hotkeys());
     STATE.with(|cell| *cell.borrow_mut() = Some(state));
 
     tray::add(control)?;
@@ -595,11 +694,14 @@ fn run_inner(app: App) -> Result<()> {
         with_state(|s| s.show());
     }
 
-    // Blocks here; no CPU use until the timer, hotkey or tray posts a message.
+    // Blocks here; no CPU use until the timer, a hotkey, the tray or a source posts a message.
     let mut msg = MSG::default();
     // SAFETY: standard message loop on the thread that created the windows.
     unsafe {
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            if settings::is_dialog_message(&msg) {
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

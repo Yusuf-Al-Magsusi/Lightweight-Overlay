@@ -1,6 +1,9 @@
 //! Direct2D + DirectWrite implementation of the core `Canvas` trait.
 //! Draws into a 32-bit premultiplied-alpha DIB through a DC render target; the
 //! window shows the result with `UpdateLayeredWindow`.
+//!
+//! The factories are created once (`Gfx`) and shared by every surface, so
+//! each widget window costs only its bitmap and render target.
 
 use std::ffi::c_void;
 
@@ -25,6 +28,7 @@ fn d2d_color(c: Color) -> D2D1_COLOR_F {
 }
 
 /// Text measuring only needs DirectWrite, so sizes can be computed before any window exists.
+#[derive(Clone)]
 pub struct Measurer {
     dw: IDWriteFactory,
 }
@@ -72,19 +76,37 @@ impl TextMeasure for Measurer {
     }
 }
 
-/// Owns the DIB and render target for one overlay surface.
+/// The graphics factories, created once and shared by all surfaces.
+#[derive(Clone)]
+pub struct Gfx {
+    d2d: ID2D1Factory,
+    pub measurer: Measurer,
+}
+
+impl Gfx {
+    pub fn new() -> Result<Self> {
+        // SAFETY: plain factory creation with valid arguments.
+        let d2d: ID2D1Factory =
+            unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
+        Ok(Self {
+            d2d,
+            measurer: Measurer::new()?,
+        })
+    }
+}
+
+/// Owns the DIB and render target for one widget window.
 pub struct Surface {
     pub width: i32,
     pub height: i32,
     pub mem_dc: HDC,
     measurer: Measurer,
     rt: ID2D1DCRenderTarget,
-    // Keeps the bitmap alive for as long as the DC uses it.
-    _dib: HBITMAP,
+    dib: HBITMAP,
 }
 
 impl Surface {
-    pub fn new(width: i32, height: i32) -> Result<Self> {
+    pub fn new(gfx: &Gfx, width: i32, height: i32) -> Result<Self> {
         // SAFETY: standard GDI/Direct2D setup; every handle is checked by `?` and kept alive in `Self`.
         unsafe {
             let screen = GetDC(None);
@@ -103,10 +125,16 @@ impl Surface {
                 ..Default::default()
             };
             let mut bits: *mut c_void = std::ptr::null_mut();
-            let dib = CreateDIBSection(Some(mem_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)?;
+            let dib = match CreateDIBSection(Some(mem_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
+            {
+                Ok(d) => d,
+                Err(e) => {
+                    let _ = DeleteDC(mem_dc);
+                    return Err(e);
+                }
+            };
             SelectObject(mem_dc, dib.into());
 
-            let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let props = D2D1_RENDER_TARGET_PROPERTIES {
                 r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
                 pixelFormat: D2D1_PIXEL_FORMAT {
@@ -118,14 +146,21 @@ impl Surface {
                 usage: D2D1_RENDER_TARGET_USAGE_NONE,
                 minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
             };
-            let rt = d2d.CreateDCRenderTarget(&props)?;
+            let rt = match gfx.d2d.CreateDCRenderTarget(&props) {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = DeleteDC(mem_dc);
+                    let _ = DeleteObject(dib.into());
+                    return Err(e);
+                }
+            };
             Ok(Self {
                 width,
                 height,
                 mem_dc,
-                measurer: Measurer::new()?,
+                measurer: gfx.measurer.clone(),
                 rt,
-                _dib: dib,
+                dib,
             })
         }
     }
@@ -147,7 +182,6 @@ impl Surface {
         let mut frame = Frame {
             rt: &self.rt,
             measurer: &self.measurer,
-            origin: (0.0, 0.0),
         };
         draw(&mut frame);
         // SAFETY: paired with BeginDraw above.
@@ -155,17 +189,21 @@ impl Surface {
     }
 }
 
-/// One frame being drawn. `origin` lets the platform stack widgets vertically.
+impl Drop for Surface {
+    fn drop(&mut self) {
+        // SAFETY: both handles were created in `new` and are not used afterwards.
+        // Deleting the DC first releases the bitmap selected into it.
+        unsafe {
+            let _ = DeleteDC(self.mem_dc);
+            let _ = DeleteObject(self.dib.into());
+        }
+    }
+}
+
+/// One frame being drawn.
 pub struct Frame<'a> {
     rt: &'a ID2D1DCRenderTarget,
     measurer: &'a Measurer,
-    origin: (f32, f32),
-}
-
-impl Frame<'_> {
-    pub fn set_origin(&mut self, x: f32, y: f32) {
-        self.origin = (x, y);
-    }
 }
 
 impl TextMeasure for Frame<'_> {
@@ -174,25 +212,53 @@ impl TextMeasure for Frame<'_> {
     }
 }
 
+fn rounded(x: f32, y: f32, w: f32, h: f32, radius: f32) -> D2D1_ROUNDED_RECT {
+    D2D1_ROUNDED_RECT {
+        rect: D2D_RECT_F {
+            left: x,
+            top: y,
+            right: x + w,
+            bottom: y + h,
+        },
+        radiusX: radius,
+        radiusY: radius,
+    }
+}
+
 impl Canvas for Frame<'_> {
     fn fill_rounded_rect(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, color: Color) {
-        let (ox, oy) = self.origin;
         // SAFETY: called between BeginDraw and EndDraw with a valid render target.
         unsafe {
             if let Ok(brush) = self.rt.CreateSolidColorBrush(&d2d_color(color), None) {
-                self.rt.FillRoundedRectangle(
-                    &D2D1_ROUNDED_RECT {
-                        rect: D2D_RECT_F {
-                            left: ox + x,
-                            top: oy + y,
-                            right: ox + x + w,
-                            bottom: oy + y + h,
-                        },
-                        radiusX: radius,
-                        radiusY: radius,
-                    },
-                    &brush,
-                );
+                self.rt
+                    .FillRoundedRectangle(&rounded(x, y, w, h, radius), &brush);
+            }
+        }
+    }
+
+    fn stroke_rounded_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        thickness: f32,
+        color: Color,
+    ) {
+        // Strokes are centred on the path, so inset by half the thickness to stay inside.
+        let half = thickness / 2.0;
+        let rect = rounded(
+            x + half,
+            y + half,
+            w - thickness,
+            h - thickness,
+            (radius - half).max(0.0),
+        );
+        // SAFETY: called between BeginDraw and EndDraw with a valid render target.
+        unsafe {
+            if let Ok(brush) = self.rt.CreateSolidColorBrush(&d2d_color(color), None) {
+                self.rt.DrawRoundedRectangle(&rect, &brush, thickness, None);
             }
         }
     }
@@ -207,7 +273,6 @@ impl Canvas for Frame<'_> {
         max_width: f32,
         color: Color,
     ) {
-        let (ox, oy) = self.origin;
         let Ok(format) = self.measurer.format(font, size) else {
             return;
         };
@@ -229,10 +294,10 @@ impl Canvas for Frame<'_> {
                     &wide,
                     &format,
                     &D2D_RECT_F {
-                        left: ox + x,
-                        top: oy + y,
-                        right: ox + x + max_width,
-                        bottom: oy + y + HUGE,
+                        left: x,
+                        top: y,
+                        right: x + max_width,
+                        bottom: y + HUGE,
                     },
                     &brush,
                     D2D1_DRAW_TEXT_OPTIONS_CLIP,
@@ -243,7 +308,6 @@ impl Canvas for Frame<'_> {
     }
 
     fn draw_text(&mut self, text: &str, font: &str, size: f32, x: f32, y: f32, color: Color) {
-        let (ox, oy) = self.origin;
         let Ok(format) = self.measurer.format(font, size) else {
             return;
         };
@@ -255,10 +319,10 @@ impl Canvas for Frame<'_> {
                     &wide,
                     &format,
                     &D2D_RECT_F {
-                        left: ox + x,
-                        top: oy + y,
-                        right: ox + x + HUGE,
-                        bottom: oy + y + HUGE,
+                        left: x,
+                        top: y,
+                        right: x + HUGE,
+                        bottom: y + HUGE,
                     },
                     &brush,
                     D2D1_DRAW_TEXT_OPTIONS_NONE,

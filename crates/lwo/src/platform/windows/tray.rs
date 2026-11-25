@@ -10,7 +10,17 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const WM_TRAY: u32 = WM_APP + 1;
 pub const ID_TOGGLE: usize = 1;
 pub const ID_QUIT: usize = 2;
+pub const ID_EDIT: usize = 3;
+pub const ID_SETTINGS: usize = 4;
 const ICON_ID: u32 = 1;
+
+/// What the menu shows. The labels carry the current hotkeys.
+pub struct MenuText {
+    pub toggle: String,
+    pub edit: String,
+    /// Edit mode is on: the edit entry gets a check mark.
+    pub editing: bool,
+}
 
 fn copy_wide(dst: &mut [u16], s: &str) {
     let max = dst.len() - 1;
@@ -63,14 +73,22 @@ pub fn warn(hwnd: HWND, message: &str) {
 }
 
 /// Show the context menu at the cursor.
-pub fn show_menu(hwnd: HWND, toggle_label: &str) {
+pub fn show_menu(hwnd: HWND, text: &MenuText) {
     // SAFETY: standard popup-menu sequence; the menu is destroyed before returning.
     unsafe {
         let Ok(menu) = CreatePopupMenu() else {
             return;
         };
-        let label = windows::core::HSTRING::from(toggle_label);
-        let _ = AppendMenuW(menu, MF_STRING, ID_TOGGLE, &label);
+        let toggle = windows::core::HSTRING::from(text.toggle.as_str());
+        let edit = windows::core::HSTRING::from(text.edit.as_str());
+        let edit_flags = if text.editing {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        let _ = AppendMenuW(menu, MF_STRING, ID_TOGGLE, &toggle);
+        let _ = AppendMenuW(menu, edit_flags, ID_EDIT, &edit);
+        let _ = AppendMenuW(menu, MF_STRING, ID_SETTINGS, w!("Settings..."));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, w!("Quit"));
         let mut pt = POINT::default();
