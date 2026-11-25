@@ -16,6 +16,8 @@ pub enum Source {
     Media,
     /// Overall CPU load.
     Cpu,
+    /// CPU package power, from Windows' own energy meter (not present on every PC).
+    CpuPower,
     /// Physical memory use.
     Memory,
     /// NVIDIA GPU load, temperature, power and VRAM (through NVML, if installed).
@@ -46,6 +48,8 @@ pub struct SourceInfo {
     pub gpu: Option<GpuInfo>,
     /// Whether this account may read frame rates.
     pub fps: bool,
+    /// Whether Windows reports CPU package power here.
+    pub cpu_power: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,6 +74,7 @@ pub struct Stats {
     pub gpu: Option<GpuStats>,
     /// Frames per second of the foreground program, if it is drawing.
     pub fps: Option<f32>,
+    pub cpu_power_watts: Option<f32>,
 }
 
 /// What the system media session reported at one moment.
