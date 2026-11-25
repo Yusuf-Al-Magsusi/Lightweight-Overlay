@@ -221,6 +221,7 @@ Not measured: memory while the dialog is open; behaviour on a multi-monitor setu
 - In edit mode each window loses its click-through flag and answers `WM_NCHITTEST` with "title bar", so **Windows' own window dragging moves it** (no custom mouse code). Each widget is drawn with a green outline and a faint fill so every pixel can be grabbed even with a transparent theme. Hidden widgets (for example Now Playing with hide-when-idle) are shown so they can be placed.
 - Leaving edit mode restores click-through and saves the position of **every** widget. If edit mode was started while the overlay was hidden, the overlay is hidden again afterwards. Quitting, hiding the overlay, or applying settings while editing also leaves edit mode and saves first.
 - While editing, mouse clicks on a widget go to the widget, not the game underneath. Edit mode is meant to be used briefly.
+- **Clicking outside the widgets ends edit mode** and saves (added at the owner's request). A faintly dimmed backdrop window of ours covers all monitors, below the widgets and below an open settings window; a press and release on it ends edit mode. **No mouse hook is used** (a system-wide input hook is the kind of thing anti-cheat software watches for). The click is used up: it does not also reach what is underneath, and this includes the taskbar, so reaching the tray from edit mode takes a second click. The dimming also shows at a glance that edit mode is on. The hotkey and tray entry still work.
 - Not possible over exclusive-fullscreen games (out of scope, as for the overlay itself).
 
 ## D19: Placement model (Milestone 4)
@@ -272,6 +273,16 @@ Release build, `scripts/measure-overlay.ps1`, Windows 11, AMD RX 9070 XT, one ru
 - The FPS widget adds about 2.5 MB. The session's kernel buffers are not part of the process's private memory and were **not measured**.
 - Not measured: a real game, rates far above 144 fps, or long sessions.
 
+### Re-measured after adding the 200 ms flush (FPS on)
+Shorter runs (90 s warm-up + 60 s sampled), one each.
+
+| Metric | Idle desktop | 144 fps load |
+|---|---|---|
+| Private working set | 23.0 MB | 23.7 MB |
+| CPU (% of all cores) | 0.013 | 0.019 |
+
+The flush thread's five wake-ups a second have no measurable cost at this precision.
+
 ## D24: FPS is read directly by the overlay (Option A), behind a swappable seam (Milestone 5)
 - The owner chose Option A from `docs/fps-investigation.md`: the overlay reads frame events itself with ETW and **never asks for elevation** (hard constraint 4). It works only for accounts in "Performance Log Users" (or an elevated run); for everyone else the FPS widget is dropped and the settings window says why. The overlay never adds anyone to the group.
 - The owner asked for a way back if the approach changes. Two things provide it:
@@ -282,8 +293,16 @@ Release build, `scripts/measure-overlay.ps1`, Windows 11, AMD RX 9070 XT, one ru
 ## D25: How the ETW source works, and why the reading is a few seconds behind (Milestone 5)
 - A real-time session named `lightweight-overlay-fps-<windows session id>` (sessions are machine-wide; the suffix keeps two signed-in users apart). It enables **only one event per provider**: DXGI id 42 and Direct3D 9 id 1 (present start), and DxgKrnl id 184 (kernel present, for programs that don't produce the runtime events). 64 KB buffers, 4 to 24 of them, flushed every second. A thread blocks in `ProcessTrace`.
 - A DirectX program produces both a runtime and a kernel event for each frame (confirmed on the Minecraft test), so `FrameCounter` uses runtime events when a process has any, otherwise kernel events, and never adds them.
-- **Delivery lag.** Measured on the dev PC, events arrive 1.3 s after the frame typically and up to 2.2 s, in batches one second apart. The first version assumed 1.2 s and read **12 to 18 fps for a true 30 fps** because most of each window hadn't arrived; the accuracy test caught this before it shipped. The rate is now counted over a 1 s window ending **2.5 s ago**, so the number shown describes about 2.5 to 3.5 s ago. That is a real limitation for watching sudden drops. Possible later improvement: ask Windows to flush the buffers (not tried), or an average over a longer window.
-- **Accuracy:** `crates/lwo/examples/present_rate.rs` presents at a chosen rate and reports what it really achieved. The ignored test `accuracy_against_a_known_present_rate` compares. At 30, 100 and 144 fps, all 18 readings were exactly 30.0, 100.0 and 144.0, with no events lost. Rates above 144 and real games with uneven frame pacing have not been measured this way.
+- **Delivery lag.** Left alone (flush timer of 1 s), events arrived 1.3 to 1.5 s after the frame typically and up to 2.2 s, in batches a second apart. The first version assumed 1.2 s and read **12 to 18 fps for a true 30 fps** because most of each window hadn't arrived; the accuracy test caught this before it shipped, and the delay was then set to 2.5 s. The owner found that noticeably slow, so the session is now **asked to flush every 200 ms** (`EVENT_TRACE_CONTROL_FLUSH`, from a thread that exists only while the FPS widget is on screen). Measured lag, three rates each:
+
+  | Flush | Typical (p50) | 95th percentile | Worst seen |
+  |---|---|---|---|
+  | none | 1.3 to 1.5 s | 1.9 to 2.0 s | 2.2 s |
+  | every 500 ms | 0.72 to 0.83 s | about 1.0 to 1.1 s | 1.2 s |
+  | every 200 ms | 0.33 to 0.36 s | about 0.43 to 0.48 s | 0.58 s |
+
+  The rate is now counted over a 1 s window ending **0.8 s ago**. Counting the widget's once-a-second refresh, the number reflects roughly the last 1 to 3 seconds (before: about 2.5 to 4.5). If delivery ever became slower than 0.8 s the reading would be too low; that margin was checked with every CPU thread busy (below), not under a real game.
+- **Accuracy:** `crates/lwo/examples/present_rate.rs` presents at a chosen rate and reports what it really achieved. The ignored test `accuracy_against_a_known_present_rate` compares. With the 0.8 s delay, at 30, 100 and 144 fps all readings were exactly 30.0, 100.0 and 144.0 with no events lost: two runs on an idle PC and one with all 16 CPU threads at 100% (54 readings). Rates above 144 and real games with uneven frame pacing have not been measured this way.
 - **Which program:** the process that owns the foreground window (`GetForegroundWindow`, `GetWindowThreadProcessId`). **No handle to it is opened** and nothing is read from it. Verified with the test program; **not verified with a real game** (the earlier probe's foreground mark landed on another window). Programs that draw from a helper process (many browsers and Electron apps) will show "--".
 - **Cleanup.** A session outlives its creator. It is stopped when the overlay is hidden, on Quit (also on sign-out or shutdown), and a leftover from a killed run is stopped at the next start, even if FPS is off. Verified by `scripts/fps-test.ps1`. If the overlay is killed and never started again, the session stays until restart.
 - Lost events: Windows' lost-event counters are checked every 10 polls and, if nonzero, a one-time tray balloon says the reading may be low.

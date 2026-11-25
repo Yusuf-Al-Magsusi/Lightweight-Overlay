@@ -31,7 +31,7 @@ Open **Settings...** from the tray menu. You can turn each widget on or off, set
 
 ### Moving the widgets (edit mode)
 
-Press **Ctrl+Alt+E** (or use the tray menu or the settings window). Every widget gets a green outline; drag each one wherever you like, on any monitor. Press the hotkey again to save. While editing, clicks go to the widgets instead of whatever is underneath, so keep it short. Saved positions follow the nearest screen corner, so they survive a resolution or display-scaling change.
+Press **Ctrl+Alt+E** (or use the tray menu or the settings window). The screen dims slightly and every widget gets a green outline; drag each one wherever you like, on any monitor. **Click anywhere outside the widgets** (or press the hotkey again) to finish and save. That click only ends edit mode: it doesn't also click whatever is underneath. Saved positions follow the nearest screen corner, so they survive a resolution or display-scaling change.
 
 ### Config file
 
@@ -51,7 +51,7 @@ Add-LocalGroupMember -SID S-1-5-32-559 -Member "YourUserName"
 To undo it, use `Remove-LocalGroupMember` with the same arguments, then sign out and back in. (`S-1-5-32-559` is the group's fixed ID in every Windows language. Windows 11 Home has no Computer Management screen for this.)
 
 Know before relying on it:
-- The number describes roughly the last 2.5 to 3.5 seconds, not this instant, because Windows delivers frame events in batches.
+- The number reflects roughly the last 1 to 3 seconds, not this instant: Windows delivers frame events with a short lag, and the widget updates once a second.
 - It reads the program that owns the window in front. Programs that draw from a helper process (many browsers) show `--`.
 - Checked exactly against a test program at 30, 100 and 144 fps. With real games it is **not yet verified**; compare with your game's own counter.
 - **Anti-cheat: unknown.** The overlay doesn't touch or open the game, but nothing we found says how anti-cheat systems treat reading these events. Use at your own risk, especially in competitive games.
