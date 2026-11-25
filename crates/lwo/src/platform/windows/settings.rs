@@ -11,6 +11,7 @@ use std::ffi::c_void;
 use lwo_core::form::SettingsForm;
 use lwo_core::theme::Theme;
 use lwo_core::units::TemperatureUnit;
+use lwo_core::widget::SourceInfo;
 use lwo_core::APP_NAME;
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -44,6 +45,7 @@ struct Controls {
     np_hide_idle: HWND,
     cpu_on: HWND,
     cpu_refresh: HWND,
+    cpu_power: HWND,
     ram_on: HWND,
     ram_refresh: HWND,
     gpu_on: HWND,
@@ -136,6 +138,7 @@ fn read_form(c: &Controls) -> SettingsForm {
         now_playing_hide_idle: get_check(c.np_hide_idle),
         cpu_enabled: get_check(c.cpu_on),
         cpu_refresh: get_text(c.cpu_refresh),
+        cpu_power: get_check(c.cpu_power),
         ram_enabled: get_check(c.ram_on),
         ram_refresh: get_text(c.ram_refresh),
         gpu_enabled: get_check(c.gpu_on),
@@ -166,6 +169,7 @@ fn write_form(c: &Controls, f: &SettingsForm) {
     set_check(c.np_hide_idle, f.now_playing_hide_idle);
     set_check(c.cpu_on, f.cpu_enabled);
     set_text(c.cpu_refresh, &f.cpu_refresh);
+    set_check(c.cpu_power, f.cpu_power);
     set_check(c.ram_on, f.ram_enabled);
     set_text(c.ram_refresh, &f.ram_refresh);
     set_check(c.gpu_on, f.gpu_enabled);
@@ -356,7 +360,8 @@ const FPS_NOTE_UNAVAILABLE: &str = "FPS is unavailable: your account is not in t
 /// Everything below the Widgets box is moved down by this much to fit the FPS row and note.
 const DOWN: i32 = 62;
 
-fn build(hwnd: HWND, hinst: HINSTANCE, scale: f32, font: HFONT, fps_available: bool) -> Controls {
+fn build(hwnd: HWND, hinst: HINSTANCE, scale: f32, font: HFONT, info: SourceInfo) -> Controls {
+    let (fps_available, cpu_power_available) = (info.fps, info.cpu_power);
     let b = Builder {
         parent: hwnd,
         hinst,
@@ -379,6 +384,22 @@ fn build(hwnd: HWND, hinst: HINSTANCE, scale: f32, font: HFONT, fps_available: b
     let np_hide_idle = b.check("Hide when idle", 350, row(1), 110);
     let cpu_on = b.check("CPU", 24, row(2), 120);
     let cpu_refresh = b.edit(160, row(2), 44);
+    let cpu_power = b.check(
+        if cpu_power_available {
+            "Show power (watts)"
+        } else {
+            "Show power (this PC doesn't report it)"
+        },
+        232,
+        row(2),
+        236,
+    );
+    if !cpu_power_available {
+        // SAFETY: disabling a control we created; its saved value is kept.
+        unsafe {
+            let _ = EnableWindow(cpu_power, false);
+        }
+    }
     let ram_on = b.check("Memory", 24, row(3), 120);
     let ram_refresh = b.edit(160, row(3), 44);
     let gpu_on = b.check("GPU", 24, row(4), 120);
@@ -458,6 +479,7 @@ fn build(hwnd: HWND, hinst: HINSTANCE, scale: f32, font: HFONT, fps_available: b
         np_hide_idle,
         cpu_on,
         cpu_refresh,
+        cpu_power,
         ram_on,
         ram_refresh,
         gpu_on,
@@ -618,8 +640,7 @@ pub fn open(_control: HWND) {
         }
         return;
     }
-    let Some((config, fps_available)) = super::with_state(|s| (s.config.clone(), s.info.fps))
-    else {
+    let Some((config, info)) = super::with_state(|s| (s.config.clone(), s.info)) else {
         return;
     };
 
@@ -672,7 +693,7 @@ pub fn open(_control: HWND) {
         };
 
         let font = system_font();
-        let controls = build(hwnd, hinst, scale, font, fps_available);
+        let controls = build(hwnd, hinst, scale, font, info);
         write_form(&controls, &SettingsForm::from_config(&config));
         let first = controls.clock_on;
         DIALOG.with(|d| {

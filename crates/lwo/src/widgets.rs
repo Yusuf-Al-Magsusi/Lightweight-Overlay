@@ -20,7 +20,7 @@ pub fn build(config: &Config) -> Vec<Box<dyn Widget>> {
         )));
     }
     if w.cpu.enabled {
-        out.push(Box::new(CpuWidget::new()));
+        out.push(Box::new(CpuWidget::new(w.cpu.show_power)));
     }
     if w.ram.enabled {
         out.push(Box::new(RamWidget::new()));

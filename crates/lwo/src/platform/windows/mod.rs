@@ -14,6 +14,7 @@ mod gpu;
 mod media;
 mod monitors;
 mod panel;
+mod power;
 mod sensors;
 mod settings;
 mod sources;
