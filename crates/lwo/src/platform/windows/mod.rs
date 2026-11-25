@@ -8,6 +8,7 @@
 //! Between events the thread blocks in `GetMessageW`.
 
 mod canvas;
+mod frames;
 mod gpu;
 mod media;
 mod monitors;
@@ -225,6 +226,9 @@ impl State {
     fn tick(&mut self) {
         if self.visible {
             self.stats = self.sources.poll();
+            if let Some(warning) = self.sources.take_loss_warning() {
+                tray::warn(self.control, &warning);
+            }
             self.update_panels(Pass::Due);
             self.schedule();
         }
@@ -315,8 +319,14 @@ impl State {
         // Drop widgets whose source can't run here (quietly: no error, no empty
         // panel) and tell the rest what exists.
         let mut widgets = crate::widgets::build(&self.config);
-        let gpu_ok = self.info.gpu.is_some();
-        widgets.retain(|w| w.sources().iter().all(|&s| s != Source::Gpu || gpu_ok));
+        let (gpu_ok, fps_ok) = (self.info.gpu.is_some(), self.info.fps);
+        widgets.retain(|w| {
+            w.sources().iter().all(|&s| match s {
+                Source::Gpu => gpu_ok,
+                Source::Fps => fps_ok,
+                _ => true,
+            })
+        });
         for w in &mut widgets {
             w.configure(&self.info);
         }
@@ -560,6 +570,13 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
             }
             LRESULT(0)
         }
+        WM_ENDSESSION => {
+            // Signing out or shutting down: release everything, including the tracing session.
+            if wp.0 != 0 {
+                with_state(|s| s.hide());
+            }
+            LRESULT(0)
+        }
         WM_DESTROY => {
             tray::remove(hwnd);
             // SAFETY: ends this thread's message loop.
@@ -612,6 +629,9 @@ fn run_inner(app: App) -> Result<()> {
             return Ok(());
         }
     }
+    // A killed run can leave its tracing session behind. We are the only instance,
+    // so it is safe to stop it now, whether or not FPS is switched on.
+    frames::cleanup_leftover();
 
     // SAFETY: window class registration and creation on this thread.
     let (control, hinst, overlay_class) = unsafe {
@@ -706,5 +726,8 @@ fn run_inner(app: App) -> Result<()> {
             DispatchMessageW(&msg);
         }
     }
+    // Stop every source before exiting. Statics are not reliably dropped, and the
+    // tracing session would outlive us.
+    with_state(|s| s.hide());
     Ok(())
 }

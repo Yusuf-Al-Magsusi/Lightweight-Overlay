@@ -2,6 +2,7 @@
 
 use lwo_core::clock::Clock;
 use lwo_core::config::Config;
+use lwo_core::fps::FpsWidget;
 use lwo_core::now_playing::NowPlaying;
 use lwo_core::stats::{CpuWidget, GpuWidget, RamWidget};
 use lwo_core::widget::Widget;
@@ -27,6 +28,9 @@ pub fn build(config: &Config) -> Vec<Box<dyn Widget>> {
     if w.gpu.enabled {
         out.push(Box::new(GpuWidget::new()));
     }
+    if w.fps.enabled {
+        out.push(Box::new(FpsWidget::new()));
+    }
     out
 }
 
@@ -36,9 +40,16 @@ mod tests {
     use lwo_core::config::WIDGET_IDS;
 
     #[test]
-    fn default_config_builds_every_widget_in_the_documented_order() {
-        let ids: Vec<_> = build(&Config::default()).iter().map(|w| w.id()).collect();
+    fn every_widget_is_built_in_the_documented_order() {
+        let mut c = Config::default();
+        c.widgets.fps.enabled = true;
+        let ids: Vec<_> = build(&c).iter().map(|w| w.id()).collect();
         assert_eq!(ids, WIDGET_IDS);
+    }
+
+    #[test]
+    fn fps_is_not_built_unless_switched_on() {
+        assert!(build(&Config::default()).iter().all(|w| w.id() != "fps"));
     }
 
     #[test]
